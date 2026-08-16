@@ -43,6 +43,8 @@
     display:flex; flex-direction:column; overflow:hidden; cursor:pointer; flex:1; min-height:0;
   }
   .panel.active-empty{border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-100);}
+  .panel:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+  .panel.drag-over{border-color:var(--accent); background:var(--accent-100); box-shadow:0 0 0 2px var(--accent);}
   .panel-kicker{
     font-size:11px; font-weight:700; letter-spacing:0.08em; color:var(--muted);
     padding:8px 10px 4px; flex-shrink:0;
@@ -55,7 +57,8 @@
   .paste-zone .big{font-size:13px; font-weight:700;}
   .paste-zone .small{font-size:11px; color:var(--muted);}
   .panel-img{width:100%; height:100%; object-fit:contain; display:block;}
-  .panel-meta{padding:6px 10px; font-size:12px; color:var(--muted); flex-shrink:0; border-top:1px solid var(--border);}
+  .panel-meta{padding:6px 10px; font-size:12px; color:var(--muted); flex-shrink:0; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:8px;}
+  .edit-panel-btn{padding:4px 10px; font-size:11px;}
   .panel-meta.ready{color:var(--success); font-weight:600;}
 
   .controls{display:flex; flex-direction:column; gap:8px; flex-shrink:0;}
@@ -170,40 +173,46 @@
     </section>
 
     <aside class="left">
-      <div class="panel" id="frontPanel" data-side="front">
+      <div class="panel" id="frontPanel" data-side="front" tabindex="1">
         <div class="panel-kicker">FRONT</div>
         <div class="panel-body">
           <div class="paste-zone">
             <div class="big">PASTE IMAGE</div>
-            <div class="small">Click here, then Ctrl + V</div>
+            <div class="small">Click then Ctrl + V, or drag &amp; drop image</div>
           </div>
           <img class="panel-img" hidden>
         </div>
-        <div class="panel-meta"></div>
+        <div class="panel-meta">
+          <span class="panel-meta-text"></span>
+          <button class="btn ghost small edit-panel-btn" hidden>EDIT</button>
+        </div>
       </div>
 
-      <div class="panel" id="backPanel" data-side="back">
+      <div class="panel" id="backPanel" data-side="back" tabindex="2">
         <div class="panel-kicker">BACK</div>
         <div class="panel-body">
           <div class="paste-zone">
             <div class="big">PASTE IMAGE</div>
-            <div class="small">Click here, then Ctrl + V</div>
+            <div class="small">Click then Ctrl + V, or drag &amp; drop image</div>
           </div>
           <img class="panel-img" hidden>
         </div>
-        <div class="panel-meta"></div>
+        <div class="panel-meta">
+          <span class="panel-meta-text"></span>
+          <button class="btn ghost small edit-panel-btn" hidden>EDIT</button>
+        </div>
       </div>
 
       <div class="controls">
-        <button class="btn ghost small" id="settingsBtn">TEMPLATE SETTINGS</button>
+        <button class="btn ghost small" id="settingsBtn" tabindex="6">TEMPLATE SETTINGS</button>
         <div class="field">
           <label for="copiesInput">Copies</label>
-          <input type="number" id="copiesInput" min="1" value="1">
+          <input type="number" id="copiesInput" min="1" value="1" tabindex="3">
         </div>
         <div class="error-tag" id="printError" hidden></div>
         <div class="btn-row">
-          <button class="btn primary" id="printBtn" disabled>PRINT</button>
-          <button class="btn ghost" id="clearBtn">CLEAR</button>
+          <button class="btn primary" id="printBtn" disabled tabindex="4">PRINT</button>
+          <button class="btn ghost" id="clearBtn" tabindex="5">CLEAR</button>
         </div>
       </div>
     </aside>
@@ -232,7 +241,7 @@
       <svg id="cropSvg" viewBox="0 0 100 100"></svg>
     </div>
     <div class="dialog-actions" style="justify-content:flex-start; margin-top:10px;">
-      <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90°</button>
+      <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
     </div>
     <p class="hint">Drag each dot onto a corner of the Aadhaar card, then Apply.</p>
     <div class="slider-row">
@@ -626,12 +635,16 @@
     var img = panel.querySelector('.panel-img');
     var zone = panel.querySelector('.paste-zone');
     var meta = panel.querySelector('.panel-meta');
+    var metaText = panel.querySelector('.panel-meta-text');
+    var editBtn = panel.querySelector('.edit-panel-btn');
     if (dataUrl){
       img.src = dataUrl; img.hidden = false; zone.style.display = 'none';
-      meta.textContent = statusText || 'Ready ✓'; meta.classList.add('ready');
+      metaText.textContent = statusText || 'Ready ✓'; meta.classList.add('ready');
+      editBtn.hidden = false;
     } else {
       img.hidden = true; img.removeAttribute('src'); zone.style.display = '';
-      meta.textContent = statusText || ''; meta.classList.remove('ready');
+      metaText.textContent = statusText || ''; meta.classList.remove('ready');
+      editBtn.hidden = true;
     }
   }
 
@@ -699,8 +712,33 @@
   frontPanel.addEventListener('click', function(){ focusPanel('front'); });
   backPanel.addEventListener('click', function(){ focusPanel('back'); });
 
+  document.querySelectorAll('.edit-panel-btn').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      var side = btn.closest('.panel').getAttribute('data-side');
+      var s = state[side];
+      if (s && s.original){ startCrop(side, s.original, s.corners); }
+    });
+  });
+
+  [frontPanel, backPanel].forEach(function(panel){
+    panel.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        focusPanel(panel.getAttribute('data-side'));
+      }
+    });
+  });
+
   function showError(msg){
     printError.textContent = msg; printError.hidden = false;
+  }
+
+  function handleImageFile(file, target){
+    if (!file || file.type.indexOf('image/') !== 0){ showError('Please use an image file.'); return; }
+    var reader = new FileReader();
+    reader.onload = function(){ startCrop(target, reader.result); };
+    reader.readAsDataURL(file);
   }
 
   window.addEventListener('paste', function(e){
@@ -717,17 +755,33 @@
     var target = state.activePanel;
     if (!state.front.processed) target = 'front';
     else if (!state.back.processed) target = 'back';
-    var reader = new FileReader();
-    reader.onload = function(){ startCrop(target, reader.result); };
-    reader.readAsDataURL(file);
+    handleImageFile(file, target);
+  });
+
+  [frontPanel, backPanel].forEach(function(panel){
+    var side = panel.getAttribute('data-side');
+    panel.addEventListener('dragover', function(e){
+      e.preventDefault();
+      if (cropState) return;
+      panel.classList.add('drag-over');
+    });
+    panel.addEventListener('dragleave', function(){ panel.classList.remove('drag-over'); });
+    panel.addEventListener('drop', function(e){
+      e.preventDefault();
+      panel.classList.remove('drag-over');
+      if (cropState) return;
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length){ showError('Please drop an image file.'); return; }
+      handleImageFile(files[0], side);
+    });
   });
 
   // ---------- crop dialog ----------
-  function startCrop(target, dataUrl){
+  function startCrop(target, dataUrl, presetCorners){
     var img = new Image();
     img.onload = function(){
       printError.hidden = true;
-      var corners = autoDetectCorners(img);
+      var corners = presetCorners || autoDetectCorners(img);
       cropState = {
         target: target, imageSrc: dataUrl,
         natural: { w: img.naturalWidth, h: img.naturalHeight },
@@ -900,7 +954,7 @@
         fctx.drawImage(outCanvas, 0, 0);
 
         var dataUrl = finalCanvas.toDataURL('image/jpeg', 0.92);
-        state[target] = { processed: dataUrl, statusText: 'Ready ✓' };
+        state[target] = { processed: dataUrl, statusText: 'Ready ✓', original: imageSrc, corners: corners };
         cropState = null;
         processingBackdrop.hidden = true;
         render();
@@ -982,6 +1036,11 @@
   // ---------- keyboard shortcuts ----------
   window.addEventListener('keydown', function(e){
     if (e.key === 'Escape' && cropState){ cropState = null; cropBackdrop.hidden = true; return; }
+    if (cropState && (e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey){
+      e.preventDefault();
+      rotateBtn.click();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')){
       e.preventDefault();
       if (isPrintReady()) handlePrint();
