@@ -231,6 +231,9 @@
     <div class="crop-stage">
       <svg id="cropSvg" viewBox="0 0 100 100"></svg>
     </div>
+    <div class="dialog-actions" style="justify-content:flex-start; margin-top:10px;">
+      <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90°</button>
+    </div>
     <p class="hint">Drag each dot onto a corner of the Aadhaar card, then Apply.</p>
     <div class="slider-row">
       <label class="field">Brightness <span id="brightnessVal"></span>%
@@ -359,6 +362,7 @@
   var copiesInput = $('copiesInput'), printError = $('printError');
   var settingsBackdrop = $('settingsBackdrop'), settingsDone = $('settingsDone');
   var cropBackdrop = $('cropBackdrop'), cropSvg = $('cropSvg'), cropCancel = $('cropCancel'), cropApply = $('cropApply'), cropTitle = $('cropTitle');
+  var rotateBtn = $('rotateBtn');
   var brightnessRange = $('brightnessRange'), contrastRange = $('contrastRange'), brightnessVal = $('brightnessVal'), contrastVal = $('contrastVal');
   var processingBackdrop = $('processingBackdrop'), processingLabel = $('processingLabel');
   var a4Preview = $('a4Preview'), frontSlot = $('frontSlot'), backSlot = $('backSlot');
@@ -810,6 +814,38 @@
   window.addEventListener('pointerup', function(){ if (cropState) cropState.dragIdx = null; });
 
   cropCancel.addEventListener('click', function(){ cropState = null; cropBackdrop.hidden = true; });
+
+  function rotateImage90(dataUrl, srcW, srcH){
+    return new Promise(function(resolve){
+      var img = new Image();
+      img.onload = function(){
+        var canvas = document.createElement('canvas');
+        canvas.width = srcH; canvas.height = srcW;
+        var ctx = canvas.getContext('2d');
+        ctx.translate(srcH / 2, srcW / 2);
+        ctx.rotate(Math.PI / 2);
+        ctx.drawImage(img, -srcW / 2, -srcH / 2);
+        resolve({ dataUrl: canvas.toDataURL('image/png'), w: srcH, h: srcW });
+      };
+      img.src = dataUrl;
+    });
+  }
+  rotateBtn.addEventListener('click', function(){
+    if (!cropState) return;
+    rotateBtn.disabled = true;
+    var oldW = cropState.natural.w, oldH = cropState.natural.h;
+    rotateImage90(cropState.imageSrc, oldW, oldH).then(function(res){
+      cropState.imageSrc = res.dataUrl;
+      cropState.natural = { w: res.w, h: res.h };
+      var img = new Image();
+      img.onload = function(){
+        cropState.corners = autoDetectCorners(img);
+        renderCropSvg();
+        rotateBtn.disabled = false;
+      };
+      img.src = res.dataUrl;
+    });
+  });
 
   cropApply.addEventListener('click', function(){
     if (!cropState) return;
