@@ -51,14 +51,13 @@
   }
 
   .dialog.auth-dialog-split{
-    width:640px; max-width:94vw; padding:0; display:flex; flex-direction:column;
-    overflow:hidden; position:relative;
+    width:960px; max-width:96vw; padding:0; display:grid;
+    grid-template-columns:0.95fr 1.05fr; overflow:hidden; position:relative;
   }
   .auth-side-panel{
-    width:100%; aspect-ratio:1536/1024;
     background-image:url('icons/auth-banner.png');
     background-size:contain; background-position:center; background-repeat:no-repeat;
-    background-color:#fff;
+    background-color:#fff; min-height:100%;
   }
   .auth-form-panel{padding:44px 44px 36px; position:relative; text-align:left;}
   .auth-form-panel h2{margin:0 0 20px; font-size:22px; text-align:center;}
@@ -84,7 +83,14 @@
   .auth-dialog-split .auth-divider{margin:16px 0 12px;}
 
   @media (max-width: 720px){
-    .dialog.auth-dialog-split{width:94vw;}
+    /* Side-by-side doesn't fit a narrow phone screen — stack instead (grid
+       auto-flows the two panels into rows when there's only one column).
+       The panel has no content of its own, so min-height:100% (which
+       stretches it to match the form's row height in the side-by-side
+       grid) collapses to 0 here — give it a real height via aspect-ratio
+       instead, same as the image itself. */
+    .dialog.auth-dialog-split{grid-template-columns:1fr; width:94vw;}
+    .auth-side-panel{aspect-ratio:1536/1024; min-height:0;}
   }
   .counter-widget{
     position:fixed; left:16px; bottom:16px; z-index:40; display:flex; gap:18px;
@@ -740,6 +746,19 @@
     for (var i2 = 0; i2 < iterations; i2++) m = erode(m, w, h);
     return m;
   }
+  // Erode then dilate ("opening") — snips thin bridges connecting the card
+  // to nearby background noise (a grainy/speckled surface can otherwise
+  // fuse many small bright specks into one sprawling blob after closing),
+  // while leaving the card's own solid body intact since it's much thicker
+  // than a one-or-two-pixel-wide bridge. A single stray pixel far from the
+  // card can otherwise blow up the fitted rectangle far past the real card,
+  // since min-area-rect must contain every pixel in the blob.
+  function morphOpen(mask, w, h, iterations){
+    var m = mask;
+    for (var i1 = 0; i1 < iterations; i1++) m = erode(m, w, h);
+    for (var i2 = 0; i2 < iterations; i2++) m = dilate(m, w, h);
+    return m;
+  }
   function boundaryPixels(pixels, mask, w, h){
     var out = [];
     for (var i = 0; i < pixels.length; i++){
@@ -892,13 +911,28 @@
     var maskCombined = new Uint8Array(cw * ch);
     for (var ci = 0; ci < cw * ch; ci++){ if (maskBright[ci] || maskSat[ci]) maskCombined[ci] = 1; }
 
-    // Close small gaps — a card's printed interior (photo, QR code, text)
-    // otherwise fragments into pieces smaller than a plain background blob
-    // right next to it, causing the background to win by area alone.
-    maskBright = morphClose(maskBright, cw, ch, 2);
-    maskDark = morphClose(maskDark, cw, ch, 2);
-    maskSat = morphClose(maskSat, cw, ch, 2);
-    maskCombined = morphClose(maskCombined, cw, ch, 2);
+    // Close gaps — a card's printed interior (photo, QR code, text) otherwise
+    // fragments into pieces smaller than a plain background blob right next
+    // to it, causing the background to win by area alone. This also has to
+    // bridge a subtler gap: a dim/muted header-stripe color can land below
+    // BOTH the brightness and saturation cutoffs at once (too dark to read as
+    // "bright", too muted to read as "colorful"), leaving a real several-
+    // pixel-wide band that's unclassified by every mask, splitting the white
+    // body from the header above it. 5 iterations bridges gaps up to ~10px,
+    // comfortably covering that band. This is safe against re-welding a
+    // stray outlier back on: closing (dilate then erode by the same count)
+    // fills a gap but leaves an already-thin bridge close to its original
+    // width, since dilating it out and eroding it back by equal amounts
+    // roughly cancels — so the later opening pass below can still sever it.
+    // A final light closing re-heals any spot the opening pass just barely
+    // cut apart (e.g. a perfectly straight seam that's only one row thin can
+    // be wiped out in a single erosion pass even though nothing really moved
+    // apart) without being anywhere near enough to reconnect a genuinely
+    // distant outlier.
+    maskBright = morphClose(morphOpen(morphClose(maskBright, cw, ch, 5), cw, ch, 1), cw, ch, 1);
+    maskDark = morphClose(morphOpen(morphClose(maskDark, cw, ch, 5), cw, ch, 1), cw, ch, 1);
+    maskSat = morphClose(morphOpen(morphClose(maskSat, cw, ch, 5), cw, ch, 1), cw, ch, 1);
+    maskCombined = morphClose(morphOpen(morphClose(maskCombined, cw, ch, 5), cw, ch, 1), cw, ch, 1);
 
     // Consider several candidate blobs from brightness, saturation, and
     // their union (not just the single largest from one channel) and score
