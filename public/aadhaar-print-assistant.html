@@ -809,7 +809,38 @@
   // long/short side ratio (~1.586) is a strong, cheap signal for telling the
   // card apart from a background blob that happens to also look rectangular.
   var ID_CARD_ASPECT = 85.6 / 54;
-  function evaluateCandidate(pixels, mask, w, h, total){
+  // Average brightness step across the candidate rectangle's own outline,
+  // sampled just inside vs just outside at points all the way around it.
+  // This is the one measurement that separates a real card from the things
+  // that kept beating it: a card sits on top of its surface, so its whole
+  // outline is a genuine step in brightness, whereas a patch of glare or a
+  // band of colour blends into what surrounds it and only became a "blob"
+  // because a threshold happened to cut through the middle of a smooth
+  // gradient. Shape alone can't tell those apart — a sheen can be as
+  // rectangular and as card-proportioned as a card.
+  function borderContrast(rect, gray, w, h){
+    var cx = (rect[0][0] + rect[1][0] + rect[2][0] + rect[3][0]) / 4;
+    var cy = (rect[0][1] + rect[1][1] + rect[2][1] + rect[3][1]) / 4;
+    var off = 4, total = 0, count = 0;
+    for (var i = 0; i < 4; i++){
+      var p1 = rect[i], p2 = rect[(i + 1) % 4];
+      for (var t = 0.08; t <= 0.92; t += 0.06){
+        var px = p1[0] + t * (p2[0] - p1[0]);
+        var py = p1[1] + t * (p2[1] - p1[1]);
+        var nx = px - cx, ny = py - cy;
+        var len = Math.sqrt(nx*nx + ny*ny) || 1;
+        nx /= len; ny /= len;
+        var ix = Math.round(px - nx*off), iy = Math.round(py - ny*off);
+        var ox = Math.round(px + nx*off), oy = Math.round(py + ny*off);
+        if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+        if (ox < 0 || oy < 0 || ox >= w || oy >= h) continue;
+        total += Math.abs(gray[iy*w + ix] - gray[oy*w + ox]);
+        count++;
+      }
+    }
+    return count ? total / count : 0;
+  }
+  function evaluateCandidate(pixels, mask, w, h, total, gray){
     if (!pixels) return null;
     var areaFrac = pixels.length / total;
     if (areaFrac < 0.04 || areaFrac > 0.95) return null;
@@ -844,8 +875,19 @@
     // (in log space) the further off it is in either direction.
     var aspectScore = Math.exp(-2 * Math.abs(Math.log(aspect / ID_CARD_ASPECT)));
 
+    // Reject outright below a floor rather than just scoring it low: a patch
+    // of glare can score so well on shape that no sane weighting keeps it
+    // from winning, and a real card edge measures far above this (94-190 in
+    // testing, versus near-zero for a gradient boundary), so the floor sits
+    // in a wide empty gap between the two. Anything from ~25 to ~50 gives
+    // identical results on the test set, so this isn't balanced on a knife
+    // edge.
+    var bcVal = borderContrast(rect, gray, w, h);
+    if (bcVal < 30) return null;
+
     return {
-      rect: rect, score: fillRatio * 0.5 + aspectScore * 0.5,
+      rect: rect,
+      score: fillRatio * 0.30 + aspectScore * 0.25 + Math.min(1, bcVal / 35) * 0.45,
       minX: minX, maxX: maxX, minY: minY, maxY: maxY, bboxArea: bboxArea
     };
   }
@@ -1027,7 +1069,7 @@
       .concat(topComponents(maskEdge, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskEdge }; }));
     var scored = [];
     candidates.forEach(function(cand){
-      var evaluated = evaluateCandidate(cand.pixels, cand.mask, cw, ch, cw*ch);
+      var evaluated = evaluateCandidate(cand.pixels, cand.mask, cw, ch, cw*ch, gray);
       if (evaluated) scored.push(evaluated);
     });
     // Drop candidates that sit (almost) entirely inside a substantially larger
