@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Aadhaar Corner Detection Lab</title>
+<style>
+  :root{
+    --bg:#14161a; --panel:#1c2028; --line:#2c323d; --text:#e6e9ef;
+    --muted:#98a2b3; --accent:#4c8dff; --good:#2fbf71; --warn:#e6a723; --bad:#e35d5d;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:14px; line-height:1.5;
+  }
+  header{
+    padding:14px 18px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    position:sticky; top:0; background:var(--bg); z-index:10;
+  }
+  h1{font-size:16px; margin:0; font-weight:700; letter-spacing:0.01em;}
+  .tag{font-size:11px; color:var(--muted); border:1px solid var(--line); padding:2px 7px; border-radius:99px;}
+  .wrap{padding:18px; max-width:1500px; margin:0 auto;}
+  .btn{
+    background:var(--accent); color:#fff; border:none; border-radius:7px;
+    padding:9px 15px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;
+  }
+  .btn.ghost{background:transparent; border:1px solid var(--line); color:var(--text);}
+  .btn:disabled{opacity:0.45; cursor:default;}
+  .drop{
+    border:2px dashed var(--line); border-radius:12px; padding:26px; text-align:center;
+    color:var(--muted); cursor:pointer; background:var(--panel);
+  }
+  .drop.over{border-color:var(--accent); color:var(--text);}
+  .row{display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start;}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:13px;}
+  .card h2{font-size:12px; margin:0 0 9px; color:var(--muted); font-weight:600;
+    text-transform:uppercase; letter-spacing:0.06em;}
+  canvas{display:block; max-width:100%; border-radius:7px; background:#0c0e12;}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(215px,1fr)); gap:13px; margin-top:16px;}
+  .grid .card h2{font-size:11px;}
+  .stat{display:flex; gap:22px; flex-wrap:wrap; margin-top:11px;}
+  .stat div span{display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:0.05em;}
+  .stat div b{font-size:19px; font-weight:700;}
+  table{border-collapse:collapse; width:100%; font-size:12px; margin-top:9px;}
+  th,td{padding:6px 9px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap;}
+  th:first-child,td:first-child{text-align:left;}
+  th{color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;}
+  tr.win td{background:rgba(76,141,255,0.14); font-weight:700;}
+  tr.rej td{color:var(--muted);}
+  .pill{padding:1px 7px; border-radius:99px; font-size:11px; font-weight:700;}
+  .pill.good{background:rgba(47,191,113,0.18); color:var(--good);}
+  .pill.warn{background:rgba(230,167,35,0.18); color:var(--warn);}
+  .pill.bad{background:rgba(227,93,93,0.18); color:var(--bad);}
+  pre{
+    background:#0c0e12; border:1px solid var(--line); border-radius:8px; padding:11px;
+    overflow:auto; font-size:11px; max-height:280px; color:var(--muted);
+  }
+  .note{color:var(--muted); font-size:12px;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Aadhaar Corner Detection Lab</h1>
+  <span class="tag" id="srcTag">loading detector…</span>
+  <span style="flex:1"></span>
+  <button class="btn ghost" id="copyBtn" disabled>COPY DIAGNOSTICS</button>
+</header>
+
+<div class="wrap">
+  <div class="drop" id="drop">
+    <b>Drop an Aadhaar photo here</b> — or click to choose, or paste with Ctrl+V<br>
+    <span class="note">Nothing is uploaded. Everything runs locally in this browser.</span>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+
+  <div id="results" class="hidden">
+    <div class="row" style="margin-top:18px;">
+      <div class="card" style="flex:2; min-width:330px;">
+        <h2>Detected corners</h2>
+        <canvas id="cvFinal"></canvas>
+        <div class="stat">
+          <div><span>Confidence</span><b id="conf">—</b></div>
+          <div><span>Verdict</span><b id="verdict">—</b></div>
+          <div><span>Time</span><b id="time">—</b></div>
+          <div><span>Candidates</span><b id="nCand">—</b></div>
+        </div>
+      </div>
+      <div class="card" style="flex:2; min-width:330px;">
+        <h2>All candidates (blue = winner, grey = rejected)</h2>
+        <canvas id="cvCand"></canvas>
+        <p class="note" id="candNote"></p>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h2>Candidate scoring</h2>
+      <div style="overflow-x:auto;"><table id="tbl"></table></div>
+    </div>
+
+    <div class="grid" id="stages"></div>
+
+    <div class="card" style="margin-top:16px;">
+      <h2>Diagnostics (numbers only — no image data)</h2>
+      <pre id="json"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var APP_URL = 'aadhaar-print-assistant.html';
+  var START = '// ---------- lightweight local edge-based card auto-detect ----------';
+  var END   = '// ---------- mild sharpen ----------';
+  var A = null, lastDiag = null;
+
+  var drop=document.getElementById('drop'), fileInput=document.getElementById('file');
+  var results=document.getElementById('results'), srcTag=document.getElementById('srcTag');
+  var copyBtn=document.getElementById('copyBtn');
+
+  // Pull the detector straight out of the live app rather than keeping a copy
+  // here: a second copy would drift the moment the app changes, and then the
+  // lab would be reporting on an algorithm nobody is actually shipping.
+  fetch(APP_URL + '?v=' + Date.now(), {cache:'no-store'}).then(function(r){ return r.text(); })
+  .then(function(html){
+    var s=html.indexOf(START), e=html.indexOf(END);
+    if(s<0||e<0) throw new Error('detector markers not found in app HTML');
+    var src=html.slice(s,e);
+    A = new Function(src + '\n; return {' +
+      'autoDetectCorners:autoDetectCorners, otsuThreshold:otsuThreshold,' +
+      'topComponents:topComponents, morphClose:morphClose, morphOpen:morphOpen,' +
+      'fillHoles:fillHoles, evaluateCandidate:evaluateCandidate, boxBlur3:boxBlur3,' +
+      'borderContrast:borderContrast };')();
+    srcTag.textContent = 'detector loaded from live app (' + src.length.toLocaleString() + ' chars)';
+  }).catch(function(err){
+    srcTag.textContent = 'FAILED to load detector: ' + err.message;
+    srcTag.style.color = 'var(--bad)';
+  });
+
+  drop.addEventListener('click', function(){ fileInput.click(); });
+  drop.addEventListener('dragover', function(e){ e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', function(){ drop.classList.remove('over'); });
+  drop.addEventListener('drop', function(e){
+    e.preventDefault(); drop.classList.remove('over');
+    if(e.dataTransfer.files && e.dataTransfer.files[0]) load(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', function(e){ if(e.target.files[0]) load(e.target.files[0]); });
+  window.addEventListener('paste', function(e){
+    var items=(e.clipboardData||{}).items||[];
+    for(var i=0;i<items.length;i++){
+      if(items[i].type.indexOf('image')===0){ load(items[i].getAsFile()); break; }
+    }
+  });
+
+  function load(file){
+    if(!A){ alert('Detector still loading — try again in a second.'); return; }
+    var fr=new FileReader();
+    fr.onload=function(){
+      var img=new Image();
+      img.onload=function(){ run(img); };
+      img.onerror=function(){ alert('Could not read that image.'); };
+      img.src=fr.result;
+    };
+    fr.readAsDataURL(file);
+  }
+
+  function maskCanvas(mask, w, h, tint){
+    var c=document.createElement('canvas'); c.width=w; c.height=h;
+    var x=c.getContext('2d'), d=x.createImageData(w,h);
+    for(var i=0;i<w*h;i++){
+      var on=mask[i]===1;
+      d.data[i*4]   = on ? tint[0] : 12;
+      d.data[i*4+1] = on ? tint[1] : 14;
+      d.data[i*4+2] = on ? tint[2] : 18;
+      d.data[i*4+3] = 255;
+    }
+    x.putImageData(d,0,0); return c;
+  }
+  function fieldCanvas(field, w, h, max){
+    var c=document.createElement('canvas'); c.width=w; c.height=h;
+    var x=c.getContext('2d'), d=x.createImageData(w,h);
+    for(var i=0;i<w*h;i++){
+      var v=Math.max(0,Math.min(255, field[i]*(255/(max||255))));
+      d.data[i*4]=d.data[i*4+1]=d.data[i*4+2]=v; d.data[i*4+3]=255;
+    }
+    x.putImageData(d,0,0); return c;
+  }
+  function addStage(title, canvas){
+    var card=document.createElement('div'); card.className='card';
+    var h=document.createElement('h2'); h.textContent=title;
+    canvas.style.width='100%';
+    card.appendChild(h); card.appendChild(canvas);
+    document.getElementById('stages').appendChild(card);
+  }
+
+  function run(img){
+    var t0=performance.now();
+    var w=img.naturalWidth, h=img.naturalHeight;
+    var maxDim=480, scale=Math.min(1,maxDim/Math.max(w,h));
+    var cw=Math.max(2,Math.round(w*scale)), ch=Math.max(2,Math.round(h*scale));
+    var c=document.createElement('canvas'); c.width=cw; c.height=ch;
+    var ctx=c.getContext('2d'); ctx.drawImage(img,0,0,cw,ch);
+    var data=ctx.getImageData(0,0,cw,ch).data;
+
+    var gray=new Float32Array(cw*ch), sat=new Float32Array(cw*ch);
+    for(var i=0;i<cw*ch;i++){
+      gray[i]=0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2];
+      var r=data[i*4],g=data[i*4+1],b=data[i*4+2];
+      sat[i]=Math.max(r,g,b)-Math.min(r,g,b);
+    }
+    gray=A.boxBlur3(gray,cw,ch); sat=A.boxBlur3(sat,cw,ch);
+
+    function otsuOf(arr){
+      var hi=new Array(256).fill(0);
+      for(var k=0;k<arr.length;k++) hi[Math.max(0,Math.min(255,Math.round(arr[k])))]++;
+      return A.otsuThreshold(hi,arr.length);
+    }
+    var t=otsuOf(gray), satT=otsuOf(sat);
+    var mB=new Uint8Array(cw*ch), mD=new Uint8Array(cw*ch), mS=new Uint8Array(cw*ch);
+    for(var j=0;j<cw*ch;j++){ if(gray[j]>t) mB[j]=1; else mD[j]=1; if(sat[j]>satT) mS[j]=1; }
+    var mC=new Uint8Array(cw*ch);
+    for(var q=0;q<cw*ch;q++) if(mB[q]||mS[q]) mC[q]=1;
+
+    var grad=new Float32Array(cw*ch);
+    for(var gy=1;gy<ch-1;gy++) for(var gx=1;gx<cw-1;gx++){
+      var gi=gy*cw+gx;
+      var xv=-gray[gi-cw-1]-2*gray[gi-1]-gray[gi+cw-1]+gray[gi-cw+1]+2*gray[gi+1]+gray[gi+cw+1];
+      var yv=-gray[gi-cw-1]-2*gray[gi-cw]-gray[gi-cw+1]+gray[gi+cw-1]+2*gray[gi+cw]+gray[gi+cw+1];
+      grad[gi]=Math.min(255,Math.sqrt(xv*xv+yv*yv));
+    }
+    var gradT=otsuOf(grad)*0.30;
+    var mE=new Uint8Array(cw*ch);
+    for(var e2=0;e2<cw*ch;e2++) if(grad[e2]>gradT) mE[e2]=1;
+
+    function proc(m){ return A.fillHoles(A.morphClose(A.morphOpen(m,cw,ch,3),cw,ch,5),cw,ch); }
+    var P={ Bright:proc(mB), Dark:proc(mD), Sat:proc(mS), Combined:proc(mC),
+            Edge:A.morphOpen(A.fillHoles(A.morphClose(mE,cw,ch,4),cw,ch),cw,ch,2) };
+
+    var cands=[];
+    Object.keys(P).forEach(function(name){
+      A.topComponents(P[name],cw,ch,3).forEach(function(px){
+        var ev=A.evaluateCandidate(px,P[name],cw,ch,cw*ch,gray);
+        var mnx=cw,mxx=0,mny=ch,mxy=0;
+        for(var z=0;z<px.length;z++){ var X=px[z]%cw,Y=(px[z]/cw)|0;
+          if(X<mnx)mnx=X; if(X>mxx)mxx=X; if(Y<mny)mny=Y; if(Y>mxy)mxy=Y; }
+        var areaFrac=px.length/(cw*ch);
+        var why='';
+        if(!ev){
+          if(areaFrac<0.04) why='too small (<4% of frame)';
+          else if(areaFrac>0.95) why='too large (>95%)';
+          else if((mxx-mnx)>0.92*cw && (mxy-mny)>0.92*ch) why='spans whole frame';
+          else why='weak border contrast (<30) or bad shape';
+        }
+        cands.push({ mask:name, px:px.length, areaFrac:areaFrac,
+          bbox:[mnx,mny,mxx,mxy], ev:ev, why:why });
+      });
+    });
+
+    // same nesting rule the app applies
+    var valid=cands.filter(function(x){return x.ev;});
+    valid.forEach(function(x){
+      x.nested = valid.some(function(y){
+        if(y===x || y.ev.bboxArea < x.ev.bboxArea*1.1) return false;
+        var ox=Math.min(x.ev.maxX,y.ev.maxX)-Math.max(x.ev.minX,y.ev.minX);
+        var oy=Math.min(x.ev.maxY,y.ev.maxY)-Math.max(x.ev.minY,y.ev.minY);
+        if(ox<=0||oy<=0) return false;
+        return ox*oy >= 0.92*(x.ev.maxX-x.ev.minX)*(x.ev.maxY-x.ev.minY);
+      });
+    });
+    var pool=valid.filter(function(x){return !x.nested;});
+    if(!pool.length) pool=valid;
+    pool.sort(function(a,b){ return b.ev.score-a.ev.score; });
+    var winner=pool[0]||null;
+
+    var corners=A.autoDetectCorners(img);
+    var ms=Math.round(performance.now()-t0);
+
+    // Confidence: how good the winner is, and how clearly it beat any
+    // genuinely DIFFERENT rival. The same card usually surfaces in several
+    // masks at once, so the runner-up is normally a near-copy of the winner —
+    // counting that as a close contest would report "uncertain" precisely when
+    // every method agreed. Only a rival covering different pixels is a real
+    // disagreement.
+    function bboxIoU(a,b){
+      var ox=Math.min(a.maxX,b.maxX)-Math.max(a.minX,b.minX);
+      var oy=Math.min(a.maxY,b.maxY)-Math.max(a.minY,b.minY);
+      if(ox<=0||oy<=0) return 0;
+      var inter=ox*oy;
+      return inter/(a.bboxArea+b.bboxArea-inter);
+    }
+    var conf=0, rival=null;
+    if(winner){
+      for(var ri=1; ri<pool.length; ri++){
+        if(bboxIoU(winner.ev, pool[ri].ev) < 0.70){ rival=pool[ri]; break; }
+      }
+      var margin = rival ? (winner.ev.score-rival.ev.score) : 0.25;
+      var bc = winner.ev.bc || 0;
+      conf = Math.round(100*Math.max(0,Math.min(1,
+        0.45*winner.ev.score + 0.30*Math.min(1,margin/0.15) + 0.25*Math.min(1,bc/90))));
+    }
+    var verdict = conf>=90?'excellent':conf>=80?'very good':conf>=70?'acceptable':conf>=55?'uncertain':'MANUAL';
+    var pillCls = conf>=80?'good':conf>=55?'warn':'bad';
+
+    // ---- render ----
+    document.getElementById('stages').innerHTML='';
+    results.classList.remove('hidden');
+
+    var fin=document.getElementById('cvFinal');
+    fin.width=cw; fin.height=ch;
+    var fx=fin.getContext('2d'); fx.drawImage(c,0,0);
+    fx.lineWidth=2; fx.strokeStyle='#4c8dff'; fx.fillStyle='#4c8dff';
+    fx.beginPath();
+    corners.forEach(function(p,idx){
+      var X=p[0]*scale, Y=p[1]*scale;
+      if(idx===0) fx.moveTo(X,Y); else fx.lineTo(X,Y);
+    });
+    fx.closePath(); fx.stroke();
+    corners.forEach(function(p){
+      fx.beginPath(); fx.arc(p[0]*scale,p[1]*scale,4,0,7); fx.fill();
+    });
+
+    var cc=document.getElementById('cvCand');
+    cc.width=cw; cc.height=ch;
+    var cx2=cc.getContext('2d'); cx2.drawImage(c,0,0);
+    cx2.globalAlpha=0.85; cx2.lineWidth=1.5;
+    cands.forEach(function(k){
+      if(!k.ev) return;
+      cx2.strokeStyle = (k===winner) ? '#4c8dff' : (k.nested ? '#7a5cff' : '#8b95a6');
+      cx2.lineWidth = (k===winner) ? 2.5 : 1;
+      cx2.beginPath();
+      k.ev.rect.forEach(function(p,idx){ if(idx===0) cx2.moveTo(p[0],p[1]); else cx2.lineTo(p[0],p[1]); });
+      cx2.closePath(); cx2.stroke();
+    });
+    cx2.globalAlpha=1;
+    document.getElementById('candNote').textContent =
+      'purple = discarded for sitting inside a bigger candidate; grey = valid but lower score';
+
+    document.getElementById('conf').innerHTML='<span class="pill '+pillCls+'">'+conf+'</span>';
+    document.getElementById('verdict').textContent=verdict;
+    document.getElementById('time').textContent=ms+' ms';
+    document.getElementById('nCand').textContent=valid.length+' / '+cands.length;
+
+    var rows=['<tr><th>Mask</th><th>Pixels</th><th>Area %</th><th>Fill</th><th>Aspect</th>'+
+              '<th>Border</th><th>Score</th><th>Status</th></tr>'];
+    cands.slice().sort(function(a,b){
+      return (b.ev?b.ev.score:-1)-(a.ev?a.ev.score:-1);
+    }).forEach(function(k){
+      var cls = k===winner ? 'win' : (!k.ev ? 'rej' : '');
+      var s1=k.ev?Math.hypot(k.ev.rect[1][0]-k.ev.rect[0][0],k.ev.rect[1][1]-k.ev.rect[0][1]):0;
+      var s2=k.ev?Math.hypot(k.ev.rect[2][0]-k.ev.rect[1][0],k.ev.rect[2][1]-k.ev.rect[1][1]):0;
+      var asp=k.ev?(Math.max(s1,s2)/(Math.min(s1,s2)||1)):0;
+      var fill=k.ev?(k.px/(((k.ev.maxX-k.ev.minX+1))*((k.ev.maxY-k.ev.minY+1)))):0;
+      rows.push('<tr class="'+cls+'"><td>'+k.mask+'</td><td>'+k.px.toLocaleString()+'</td>'+
+        '<td>'+(k.areaFrac*100).toFixed(1)+'</td>'+
+        '<td>'+(k.ev?fill.toFixed(2):'—')+'</td>'+
+        '<td>'+(k.ev?asp.toFixed(2):'—')+'</td>'+
+        '<td>'+(k.ev&&k.ev.bc!=null?k.ev.bc.toFixed(0):'—')+'</td>'+
+        '<td>'+(k.ev?k.ev.score.toFixed(3):'—')+'</td>'+
+        '<td>'+(k===winner?'WINNER':(k.nested?'nested':(k.ev?'ok':k.why)))+'</td></tr>');
+    });
+    document.getElementById('tbl').innerHTML=rows.join('');
+
+    addStage('Grayscale', fieldCanvas(gray,cw,ch,255));
+    addStage('Saturation', fieldCanvas(sat,cw,ch,160));
+    addStage('Gradient magnitude', fieldCanvas(grad,cw,ch,180));
+    addStage('Bright mask (Otsu '+t+')', maskCanvas(P.Bright,cw,ch,[80,170,255]));
+    addStage('Dark mask', maskCanvas(P.Dark,cw,ch,[255,140,80]));
+    addStage('Saturation mask (Otsu '+satT+')', maskCanvas(P.Sat,cw,ch,[210,120,255]));
+    addStage('Combined mask', maskCanvas(P.Combined,cw,ch,[110,230,160]));
+    addStage('Edge mask (thr '+gradT.toFixed(0)+')', maskCanvas(P.Edge,cw,ch,[255,220,90]));
+
+    lastDiag={
+      image:{ w:w, h:h, detectAt:[cw,ch] },
+      thresholds:{ grayOtsu:t, satOtsu:satT, gradThr:+gradT.toFixed(1) },
+      timeMs:ms, confidence:conf, verdict:verdict,
+      cornersFullRes:corners.map(function(p){return [Math.round(p[0]),Math.round(p[1])];}),
+      candidates:cands.map(function(k){
+        return { mask:k.mask, px:k.px, areaPct:+(k.areaFrac*100).toFixed(1), bbox:k.bbox,
+          score:k.ev?+k.ev.score.toFixed(3):null, border:k.ev&&k.ev.bc!=null?+k.ev.bc.toFixed(1):null,
+          nested:!!k.nested, winner:k===winner, rejected:k.why||null };
+      })
+    };
+    document.getElementById('json').textContent=JSON.stringify(lastDiag,null,1);
+    copyBtn.disabled=false;
+  }
+
+  copyBtn.addEventListener('click', function(){
+    if(!lastDiag) return;
+    var txt=JSON.stringify(lastDiag,null,1);
+    navigator.clipboard.writeText(txt).then(function(){
+      copyBtn.textContent='COPIED ✓';
+      setTimeout(function(){ copyBtn.textContent='COPY DIAGNOSTICS'; },1600);
+    }, function(){
+      var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); ta.remove();
+      copyBtn.textContent='COPIED ✓';
+      setTimeout(function(){ copyBtn.textContent='COPY DIAGNOSTICS'; },1600);
+    });
+  });
+})();
+</script>
+</body>
+</html>
