@@ -888,6 +888,10 @@
     return {
       rect: rect,
       score: fillRatio * 0.30 + aspectScore * 0.25 + Math.min(1, bcVal / 35) * 0.45,
+      // carried through unused by the app itself, but it's the single most
+      // diagnostic number when a real photo misdetects, and detection-lab.html
+      // reads it straight off this object
+      bc: bcVal, fill: fillRatio, aspect: aspect,
       minX: minX, maxX: maxX, minY: minY, maxY: maxY, bboxArea: bboxArea
     };
   }
