@@ -659,8 +659,11 @@
     }
     // A blob whose bounding box spans nearly the whole frame in both axes is
     // almost always the surrounding background (it wraps around the card and
-    // touches every edge), not the card itself — reject it as a candidate.
-    if (minX <= 1 && maxX >= w-2 && minY <= 1 && maxY >= h-2) return null;
+    // reaches close to every edge), not the card itself — reject it as a
+    // candidate. Checked as a fraction of the frame, not "touches the exact
+    // edge pixel", since noisy real photos (wood grain, fabric weave) rarely
+    // produce a background blob that survives closing right up to pixel 0.
+    if ((maxX - minX) > 0.92*w && (maxY - minY) > 0.92*h) return null;
     var bboxArea = (maxX - minX + 1) * (maxY - minY + 1);
     var fillRatio = pixels.length / bboxArea; // how rectangle-like the blob is
 
@@ -743,6 +746,19 @@
     }
     gray = boxBlur3(gray, cw, ch);
 
+    // Saturation ("how colorful", not how bright): max(R,G,B) - min(R,G,B).
+    // Uneven lighting (a glare or shadow across a table) skews raw brightness
+    // a lot but barely touches saturation, so a printed card's colors (blues,
+    // oranges, reds) often separate it from a mostly-neutral surface — wood,
+    // fabric, paper — far more reliably than brightness alone under a
+    // real-world lighting gradient.
+    var sat = new Float32Array(cw * ch);
+    for (var si = 0; si < cw * ch; si++){
+      var r = data[si*4], g = data[si*4+1], b = data[si*4+2];
+      sat[si] = Math.max(r, g, b) - Math.min(r, g, b);
+    }
+    sat = boxBlur3(sat, cw, ch);
+
     // Segment by brightness (Otsu) — try both polarities since we don't know if
     // the card is lighter or darker than its background.
     var hist = new Array(256).fill(0);
@@ -752,18 +768,40 @@
     for (var mi = 0; mi < gray.length; mi++){
       if (gray[mi] > t) maskBright[mi] = 1; else maskDark[mi] = 1;
     }
-    // Close small gaps first — a card's printed interior (photo, QR code,
-    // text) otherwise fragments into pieces smaller than a plain background
-    // blob right next to it, causing the background to win by area alone.
+
+    var satHist = new Array(256).fill(0);
+    for (var shi = 0; shi < sat.length; shi++) satHist[Math.max(0, Math.min(255, Math.round(sat[shi])))]++;
+    var satT = otsuThreshold(satHist, sat.length);
+    var maskSat = new Uint8Array(cw * ch);
+    for (var smi = 0; smi < sat.length; smi++){ if (sat[smi] > satT) maskSat[smi] = 1; }
+
+    // Neither channel alone reliably covers a whole real card: a plain
+    // white/gray section of the card has near-zero saturation (so only
+    // brightness catches it), while a printed color like a blue header
+    // stripe can be darker than the card's own white body (so only
+    // saturation catches it). Union the two so both kinds of card region
+    // merge into one blob instead of the card splitting into disconnected
+    // "bright but colorless" and "colorful but darkish" pieces.
+    var maskCombined = new Uint8Array(cw * ch);
+    for (var ci = 0; ci < cw * ch; ci++){ if (maskBright[ci] || maskSat[ci]) maskCombined[ci] = 1; }
+
+    // Close small gaps — a card's printed interior (photo, QR code, text)
+    // otherwise fragments into pieces smaller than a plain background blob
+    // right next to it, causing the background to win by area alone.
     maskBright = morphClose(maskBright, cw, ch, 2);
     maskDark = morphClose(maskDark, cw, ch, 2);
+    maskSat = morphClose(maskSat, cw, ch, 2);
+    maskCombined = morphClose(maskCombined, cw, ch, 2);
 
-    // Consider several candidate blobs from both polarities (not just the
-    // single largest) and score each by how rectangular it is AND how close
-    // its aspect ratio is to a real ID card, since the largest blob by area
-    // is often the surrounding table/paper rather than the card itself.
+    // Consider several candidate blobs from brightness, saturation, and
+    // their union (not just the single largest from one channel) and score
+    // each by how rectangular it is AND how close its aspect ratio is to a
+    // real ID card, since the largest blob by area is often the surrounding
+    // table/paper rather than the card itself.
     var candidates = topComponents(maskBright, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskBright }; })
-      .concat(topComponents(maskDark, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskDark }; }));
+      .concat(topComponents(maskDark, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskDark }; }))
+      .concat(topComponents(maskSat, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskSat }; }))
+      .concat(topComponents(maskCombined, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskCombined }; }));
     var best = null;
     candidates.forEach(function(cand){
       var evaluated = evaluateCandidate(cand.pixels, cand.mask, cw, ch, cw*ch);
