@@ -561,11 +561,15 @@
     }
     return threshold;
   }
-  // Largest 4-connected component of mask===1, returned as a list of pixel indices.
-  function largestComponent(mask, w, h){
+  // Returns up to maxCount 4-connected components of mask===1, largest first,
+  // each as a list of pixel indices. Considering several candidates (rather
+  // than only the single largest blob) matters because an ID card's interior
+  // — photo, QR code, printed text — often breaks it into pieces smaller
+  // than a plain, unbroken background region right next to it.
+  function topComponents(mask, w, h, maxCount){
     var visited = new Uint8Array(w * h);
     var stack = new Int32Array(w * h);
-    var bestPixels = null, bestArea = 0;
+    var results = [];
     for (var start = 0; start < w * h; start++){
       if (mask[start] !== 1 || visited[start]) continue;
       var sp = 0;
@@ -580,9 +584,54 @@
         if (py > 0){ var n3 = idx - w; if (mask[n3] === 1 && !visited[n3]){ visited[n3] = 1; stack[sp++] = n3; } }
         if (py < h - 1){ var n4 = idx + w; if (mask[n4] === 1 && !visited[n4]){ visited[n4] = 1; stack[sp++] = n4; } }
       }
-      if (pixels.length > bestArea){ bestArea = pixels.length; bestPixels = pixels; }
+      results.push(pixels);
     }
-    return bestPixels;
+    results.sort(function(a, b){ return b.length - a.length; });
+    return results.slice(0, maxCount);
+  }
+  // Dilate then erode (morphological closing) with an 8-neighbour kernel —
+  // bridges small gaps so a card's printed interior (text, QR code, photo)
+  // merges into one solid blob instead of fragmenting.
+  function dilate(mask, w, h){
+    var out = new Uint8Array(w * h);
+    for (var y = 0; y < h; y++){
+      for (var x = 0; x < w; x++){
+        var on = false;
+        for (var dy = -1; dy <= 1 && !on; dy++){
+          var yy = y + dy; if (yy < 0 || yy >= h) continue;
+          for (var dx = -1; dx <= 1; dx++){
+            var xx = x + dx; if (xx < 0 || xx >= w) continue;
+            if (mask[yy*w + xx] === 1){ on = true; break; }
+          }
+        }
+        out[y*w + x] = on ? 1 : 0;
+      }
+    }
+    return out;
+  }
+  function erode(mask, w, h){
+    var out = new Uint8Array(w * h);
+    for (var y = 0; y < h; y++){
+      for (var x = 0; x < w; x++){
+        var allOn = true;
+        for (var dy = -1; dy <= 1 && allOn; dy++){
+          var yy = y + dy;
+          if (yy < 0 || yy >= h){ allOn = false; break; }
+          for (var dx = -1; dx <= 1; dx++){
+            var xx = x + dx;
+            if (xx < 0 || xx >= w || mask[yy*w + xx] !== 1){ allOn = false; break; }
+          }
+        }
+        out[y*w + x] = allOn ? 1 : 0;
+      }
+    }
+    return out;
+  }
+  function morphClose(mask, w, h, iterations){
+    var m = mask;
+    for (var i1 = 0; i1 < iterations; i1++) m = dilate(m, w, h);
+    for (var i2 = 0; i2 < iterations; i2++) m = erode(m, w, h);
+    return m;
   }
   function boundaryPixels(pixels, mask, w, h){
     var out = [];
@@ -594,10 +643,14 @@
     }
     return out;
   }
-  function scoreBlob(pixels, w, h, total){
-    if (!pixels) return -1;
+  // An Aadhaar card is a fixed ISO/IEC 7810 ID-1 size (85.6mm x 54mm), so its
+  // long/short side ratio (~1.586) is a strong, cheap signal for telling the
+  // card apart from a background blob that happens to also look rectangular.
+  var ID_CARD_ASPECT = 85.6 / 54;
+  function evaluateCandidate(pixels, mask, w, h, total){
+    if (!pixels) return null;
     var areaFrac = pixels.length / total;
-    if (areaFrac < 0.04 || areaFrac > 0.95) return -1;
+    if (areaFrac < 0.04 || areaFrac > 0.95) return null;
     var minX = w, maxX = 0, minY = h, maxY = 0;
     for (var i = 0; i < pixels.length; i++){
       var px = pixels[i] % w, py = (pixels[i] / w) | 0;
@@ -607,9 +660,26 @@
     // A blob whose bounding box spans nearly the whole frame in both axes is
     // almost always the surrounding background (it wraps around the card and
     // touches every edge), not the card itself — reject it as a candidate.
-    if (minX <= 1 && maxX >= w-2 && minY <= 1 && maxY >= h-2) return -1;
+    if (minX <= 1 && maxX >= w-2 && minY <= 1 && maxY >= h-2) return null;
     var bboxArea = (maxX - minX + 1) * (maxY - minY + 1);
-    return pixels.length / bboxArea; // fill ratio: how rectangle-like the blob is
+    var fillRatio = pixels.length / bboxArea; // how rectangle-like the blob is
+
+    var boundary = boundaryPixels(pixels, mask, w, h);
+    if (boundary.length < 8) return null;
+    var hull = convexHull(boundary);
+    if (hull.length < 3) return null;
+    var rect = minAreaRect(hull);
+    if (!rect) return null;
+
+    var side1 = Math.hypot(rect[1][0]-rect[0][0], rect[1][1]-rect[0][1]);
+    var side2 = Math.hypot(rect[2][0]-rect[1][0], rect[2][1]-rect[1][1]);
+    var longSide = Math.max(side1, side2), shortSide = Math.min(side1, side2) || 1;
+    var aspect = longSide / shortSide;
+    // 1 when the aspect ratio exactly matches a card, decaying symmetrically
+    // (in log space) the further off it is in either direction.
+    var aspectScore = Math.exp(-2 * Math.abs(Math.log(aspect / ID_CARD_ASPECT)));
+
+    return { rect: rect, score: fillRatio * 0.5 + aspectScore * 0.5 };
   }
   function convexHull(points){
     var pts = points.slice().sort(function(a, b){ return a[0] - b[0] || a[1] - b[1]; });
@@ -674,8 +744,7 @@
     gray = boxBlur3(gray, cw, ch);
 
     // Segment by brightness (Otsu) — try both polarities since we don't know if
-    // the card is lighter or darker than its background, then keep the blob
-    // that looks most like a filled rectangle.
+    // the card is lighter or darker than its background.
     var hist = new Array(256).fill(0);
     for (var hi = 0; hi < gray.length; hi++) hist[Math.max(0, Math.min(255, Math.round(gray[hi])))]++;
     var t = otsuThreshold(hist, gray.length);
@@ -683,24 +752,27 @@
     for (var mi = 0; mi < gray.length; mi++){
       if (gray[mi] > t) maskBright[mi] = 1; else maskDark[mi] = 1;
     }
-    var compBright = largestComponent(maskBright, cw, ch);
-    var compDark = largestComponent(maskDark, cw, ch);
-    var scoreBright = scoreBlob(compBright, cw, ch, cw*ch);
-    var scoreDark = scoreBlob(compDark, cw, ch, cw*ch);
-    var chosen = scoreBright >= scoreDark ? compBright : compDark;
-    var chosenMask = scoreBright >= scoreDark ? maskBright : maskDark;
-    var chosenScore = Math.max(scoreBright, scoreDark);
-    if (!chosen || chosenScore < 0) return fallback;
+    // Close small gaps first — a card's printed interior (photo, QR code,
+    // text) otherwise fragments into pieces smaller than a plain background
+    // blob right next to it, causing the background to win by area alone.
+    maskBright = morphClose(maskBright, cw, ch, 2);
+    maskDark = morphClose(maskDark, cw, ch, 2);
 
-    var boundary = boundaryPixels(chosen, chosenMask, cw, ch);
-    if (boundary.length < 8) return fallback;
-    var hull = convexHull(boundary);
-    if (hull.length < 3) return fallback;
-    var rect = minAreaRect(hull);
-    if (!rect) return fallback;
+    // Consider several candidate blobs from both polarities (not just the
+    // single largest) and score each by how rectangular it is AND how close
+    // its aspect ratio is to a real ID card, since the largest blob by area
+    // is often the surrounding table/paper rather than the card itself.
+    var candidates = topComponents(maskBright, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskBright }; })
+      .concat(topComponents(maskDark, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskDark }; }));
+    var best = null;
+    candidates.forEach(function(cand){
+      var evaluated = evaluateCandidate(cand.pixels, cand.mask, cw, ch, cw*ch);
+      if (evaluated && (!best || evaluated.score > best.score)) best = evaluated;
+    });
+    if (!best) return fallback;
 
     var sx = w / cw, sy = h / ch;
-    var scaled = rect.map(function(p){ return [p[0]*sx, p[1]*sy]; });
+    var scaled = best.rect.map(function(p){ return [p[0]*sx, p[1]*sy]; });
     var cx = 0, cy = 0;
     for (var m = 0; m < 4; m++){ cx += scaled[m][0]; cy += scaled[m][1]; }
     cx /= 4; cy /= 4;
