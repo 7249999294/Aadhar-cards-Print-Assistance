@@ -148,6 +148,7 @@
     .slider-row{flex-direction:column; gap:12px;}
     .dialog.wide{width:96vw;}
     .btn{padding:14px; font-size:15px;}
+    .browse-btn{padding:10px 16px; font-size:13px;}
   }
 
   #printRoot{display:none;}
@@ -202,8 +203,10 @@
         <div class="panel-body">
           <div class="paste-zone">
             <div class="big">PASTE IMAGE</div>
-            <div class="small">Click then Ctrl + V, or drag &amp; drop image</div>
+            <div class="small">Ctrl + V, drag &amp; drop, or</div>
+            <button type="button" class="btn ghost small browse-btn">BROWSE / CAMERA</button>
           </div>
+          <input type="file" accept="image/*" class="file-input" hidden>
           <img class="panel-img" hidden>
         </div>
         <div class="panel-meta">
@@ -217,8 +220,10 @@
         <div class="panel-body">
           <div class="paste-zone">
             <div class="big">PASTE IMAGE</div>
-            <div class="small">Click then Ctrl + V, or drag &amp; drop image</div>
+            <div class="small">Ctrl + V, drag &amp; drop, or</div>
+            <button type="button" class="btn ghost small browse-btn">BROWSE / CAMERA</button>
           </div>
+          <input type="file" accept="image/*" class="file-input" hidden>
           <img class="panel-img" hidden>
         </div>
         <div class="panel-meta">
@@ -864,6 +869,27 @@
       var files = e.dataTransfer && e.dataTransfer.files;
       if (!files || !files.length){ showError('Please drop an image file.'); return; }
       handleImageFile(files[0], side);
+    });
+  });
+
+  // Ctrl+V paste and drag-and-drop both need a keyboard/mouse desktop, so on
+  // mobile (no physical keyboard, no cross-app drag) this button + hidden
+  // file input is the only way in — it opens the OS's native gallery/camera
+  // picker and reuses the same handleImageFile() path as paste/drop.
+  document.querySelectorAll('.browse-btn').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      if (cropState) return;
+      var panel = btn.closest('.panel');
+      panel.querySelector('.file-input').click();
+    });
+  });
+  document.querySelectorAll('.file-input').forEach(function(input){
+    var side = input.closest('.panel').getAttribute('data-side');
+    input.addEventListener('change', function(e){
+      var file = e.target.files && e.target.files[0];
+      input.value = ''; // allow re-selecting the same file later
+      if (file) handleImageFile(file, side);
     });
   });
 
