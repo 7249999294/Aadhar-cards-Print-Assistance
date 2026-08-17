@@ -41,6 +41,13 @@
     padding:3px 9px; border-radius:12px; letter-spacing:0.02em; white-space:nowrap;
   }
   .counter-pill strong{font-weight:800;}
+  .auth-status{display:flex; align-items:center; gap:8px; margin-bottom:2px;}
+  .auth-status .btn{padding:4px 10px; font-size:11px;}
+  #userEmailText{font-size:11px; font-weight:600; color:var(--muted);}
+  .auth-divider{text-align:center; font-size:11px; color:var(--muted); margin:12px 0;}
+  .google-btn{
+    width:100%; display:flex; align-items:center; justify-content:center; gap:8px;
+  }
   main{flex:1; min-height:0; display:grid; grid-template-columns:1fr 300px; gap:16px;}
   aside.left{display:flex; flex-direction:column; gap:12px; min-height:0;}
 
@@ -163,6 +170,13 @@
       <div class="print-counters">
         <span class="counter-pill">TODAY <strong id="todayPrintCount">0</strong></span>
         <span class="counter-pill">TOTAL <strong id="totalPrintCount">0</strong></span>
+      </div>
+      <div class="auth-status">
+        <button class="btn ghost small" id="signInBtn">SIGN IN</button>
+        <span id="userChip" hidden>
+          <span id="userEmailText"></span>
+          <button class="btn ghost small" id="signOutBtn">SIGN OUT</button>
+        </span>
       </div>
       <span id="statusLine">Paste Aadhaar Front — Ctrl + V</span>
       <span id="trialBanner" class="hint" hidden></span>
@@ -289,6 +303,25 @@
   </div>
 </div>
 
+<div class="dialog-backdrop" id="authBackdrop" hidden>
+  <div class="dialog">
+    <h2 id="authTitle">Sign in</h2>
+    <label class="field">Email
+      <input class="input" type="email" id="authEmail" autocomplete="email" style="border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px; font-family:inherit; color:var(--text);">
+    </label>
+    <label class="field" style="margin-top:10px;">Password
+      <input class="input" type="password" id="authPassword" autocomplete="current-password" style="border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px; font-family:inherit; color:var(--text);">
+    </label>
+    <div class="error-tag" id="authError" hidden style="margin-top:10px;"></div>
+    <div class="dialog-actions">
+      <button class="btn ghost" id="authToggleMode">Create account instead</button>
+      <button class="btn primary" id="authSubmit">SIGN IN</button>
+    </div>
+    <p class="auth-divider">— or —</p>
+    <button class="btn ghost google-btn" id="googleSignInBtn">Sign in with Google</button>
+  </div>
+</div>
+
 <div id="printRoot"></div>
 
 <script>
@@ -345,7 +378,16 @@
     counters.today += n;
     saveCounters(counters);
     renderCounters();
+    if (window.AadhaarPrintApp && window.AadhaarPrintApp.onPrintRecorded) window.AadhaarPrintApp.onPrintRecorded(counters);
   }
+
+  // Small bridge object so the separate Firebase module script (loaded below) can
+  // read/write the same counters this script owns, without the two scripts needing
+  // to share a module system. Firebase is optional/additive — the app must keep
+  // working fully offline even if that script never loads.
+  window.AadhaarPrintApp = window.AadhaarPrintApp || {};
+  window.AadhaarPrintApp.getCounters = function(){ return counters; };
+  window.AadhaarPrintApp.setCounters = function(c){ counters = c; saveCounters(c); renderCounters(); };
 
   // ---------- licensing (trial + signed license key) ----------
   // The tool works free for TRIAL_DAYS. After that it locks until a valid
@@ -1174,6 +1216,135 @@
     });
   }
 })();
+</script>
+
+<script type="module">
+// ---------- Firebase (Auth + Firestore) ----------
+// Optional layer: signs in a shop owner and syncs their all-time print total to
+// Firestore so it survives a cleared browser / new device. Everything else in the
+// app (paste/crop/print) works fully offline regardless of whether this loads.
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  GoogleAuthProvider, signInWithPopup, signOut
+} from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
+import {
+  getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
+
+var firebaseConfig = {
+  apiKey: "AIzaSyDUAbczd56r_ayWlxxZRulJdz9jRZnI1i0",
+  authDomain: "aadhaar-print-assistant.firebaseapp.com",
+  projectId: "aadhaar-print-assistant",
+  storageBucket: "aadhaar-print-assistant.firebasestorage.app",
+  messagingSenderId: "61795237115",
+  appId: "1:61795237115:web:448053bfd147cc6104445e",
+};
+var app = initializeApp(firebaseConfig);
+var auth = getAuth(app);
+var db = getFirestore(app);
+
+var $ = function(id){ return document.getElementById(id); };
+var signInBtn = $('signInBtn'), signOutBtn = $('signOutBtn'), userChip = $('userChip'), userEmailText = $('userEmailText');
+var authBackdrop = $('authBackdrop'), authTitle = $('authTitle'), authEmail = $('authEmail'), authPassword = $('authPassword');
+var authError = $('authError'), authSubmit = $('authSubmit'), authToggleMode = $('authToggleMode'), googleSignInBtn = $('googleSignInBtn');
+
+var signUpMode = false;
+var currentUser = null;
+
+function friendlyAuthError(err){
+  var code = err && err.code || '';
+  if (code === 'auth/invalid-email') return 'That email address looks invalid.';
+  if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') return 'Wrong email or password.';
+  if (code === 'auth/email-already-in-use') return 'An account already exists for this email — sign in instead.';
+  if (code === 'auth/weak-password') return 'Password should be at least 6 characters.';
+  if (code === 'auth/popup-closed-by-user') return 'Google sign-in was closed before finishing.';
+  if (code === 'auth/network-request-failed') return 'No internet connection.';
+  return 'Sign-in failed. Please try again.';
+}
+
+function updateAuthDialogMode(){
+  authTitle.textContent = signUpMode ? 'Create account' : 'Sign in';
+  authSubmit.textContent = signUpMode ? 'CREATE ACCOUNT' : 'SIGN IN';
+  authToggleMode.textContent = signUpMode ? 'Sign in instead' : 'Create account instead';
+}
+function openAuthDialog(){
+  authError.hidden = true;
+  authEmail.value = ''; authPassword.value = '';
+  signUpMode = false;
+  updateAuthDialogMode();
+  authBackdrop.hidden = false;
+}
+function closeAuthDialog(){ authBackdrop.hidden = true; }
+
+signInBtn.addEventListener('click', openAuthDialog);
+authBackdrop.addEventListener('click', function(e){ if (e.target === authBackdrop) closeAuthDialog(); });
+authToggleMode.addEventListener('click', function(){ signUpMode = !signUpMode; updateAuthDialogMode(); });
+
+authSubmit.addEventListener('click', function(){
+  var email = authEmail.value.trim();
+  var password = authPassword.value;
+  authError.hidden = true;
+  if (!email || !password){
+    authError.textContent = 'Please enter both email and password.';
+    authError.hidden = false;
+    return;
+  }
+  var action = signUpMode ? createUserWithEmailAndPassword(auth, email, password) : signInWithEmailAndPassword(auth, email, password);
+  action.then(function(){ closeAuthDialog(); }).catch(function(err){
+    authError.textContent = friendlyAuthError(err);
+    authError.hidden = false;
+  });
+});
+
+googleSignInBtn.addEventListener('click', function(){
+  authError.hidden = true;
+  signInWithPopup(auth, new GoogleAuthProvider()).then(function(){ closeAuthDialog(); }).catch(function(err){
+    authError.textContent = friendlyAuthError(err);
+    authError.hidden = false;
+  });
+});
+
+signOutBtn.addEventListener('click', function(){ signOut(auth); });
+
+function syncUserOnLogin(user){
+  var ref = doc(db, 'users', user.uid);
+  return getDoc(ref).then(function(snap){
+    var local = window.AadhaarPrintApp.getCounters();
+    if (snap.exists()){
+      var remote = snap.data();
+      var mergedTotal = Math.max(local.total || 0, remote.totalPrints || 0);
+      window.AadhaarPrintApp.setCounters({ total: mergedTotal, today: local.today || 0 });
+      return updateDoc(ref, { totalPrints: mergedTotal, email: user.email || null, lastLogin: serverTimestamp() });
+    }
+    return setDoc(ref, {
+      totalPrints: local.total || 0,
+      email: user.email || null,
+      createdAt: serverTimestamp(),
+      lastLogin: serverTimestamp(),
+    });
+  }).catch(function(){ /* Firestore sync is best-effort; local counters still work. */ });
+}
+
+onAuthStateChanged(auth, function(user){
+  currentUser = user;
+  if (user){
+    signInBtn.hidden = true;
+    userChip.hidden = false;
+    userEmailText.textContent = user.email || user.phoneNumber || 'Signed in';
+    syncUserOnLogin(user);
+  } else {
+    signInBtn.hidden = false;
+    userChip.hidden = true;
+  }
+});
+
+window.AadhaarPrintApp = window.AadhaarPrintApp || {};
+window.AadhaarPrintApp.onPrintRecorded = function(counters){
+  if (!currentUser) return;
+  var ref = doc(db, 'users', currentUser.uid);
+  updateDoc(ref, { totalPrints: counters.total, lastPrintAt: serverTimestamp() }).catch(function(){});
+};
 </script>
 </body>
 </html>
