@@ -760,6 +760,41 @@
     for (var i2 = 0; i2 < iterations; i2++) m = dilate(m, w, h);
     return m;
   }
+  // Fills enclosed holes: any 0-pixel that can't be reached from the image
+  // border becomes 1. A card's big interior blocks — the QR code on the back,
+  // the photo on the front, a dense text panel — punch holes straight through
+  // the card's mask, leaving it a ring rather than a solid rectangle. That
+  // costs the card most of its fill-ratio score, while the punched-out QR
+  // block goes on to compete as its own candidate and usually wins, since a
+  // QR code is a near-perfect filled square. Filling the holes first makes
+  // the card read as the solid rectangle it actually is.
+  function fillHoles(mask, w, h){
+    var outside = new Uint8Array(w * h);
+    var stack = new Int32Array(w * h);
+    var sp = 0, i, x, y, bi, li, ri;
+    for (x = 0; x < w; x++){
+      if (!mask[x] && !outside[x]){ outside[x] = 1; stack[sp++] = x; }
+      bi = (h - 1) * w + x;
+      if (!mask[bi] && !outside[bi]){ outside[bi] = 1; stack[sp++] = bi; }
+    }
+    for (y = 0; y < h; y++){
+      li = y * w;
+      if (!mask[li] && !outside[li]){ outside[li] = 1; stack[sp++] = li; }
+      ri = y * w + w - 1;
+      if (!mask[ri] && !outside[ri]){ outside[ri] = 1; stack[sp++] = ri; }
+    }
+    while (sp > 0){
+      var idx = stack[--sp];
+      var px = idx % w, py = (idx / w) | 0;
+      if (px > 0){ var n1 = idx - 1; if (!mask[n1] && !outside[n1]){ outside[n1] = 1; stack[sp++] = n1; } }
+      if (px < w - 1){ var n2 = idx + 1; if (!mask[n2] && !outside[n2]){ outside[n2] = 1; stack[sp++] = n2; } }
+      if (py > 0){ var n3 = idx - w; if (!mask[n3] && !outside[n3]){ outside[n3] = 1; stack[sp++] = n3; } }
+      if (py < h - 1){ var n4 = idx + w; if (!mask[n4] && !outside[n4]){ outside[n4] = 1; stack[sp++] = n4; } }
+    }
+    var out = new Uint8Array(w * h);
+    for (i = 0; i < w * h; i++) out[i] = (mask[i] || !outside[i]) ? 1 : 0;
+    return out;
+  }
   function boundaryPixels(pixels, mask, w, h){
     var out = [];
     for (var i = 0; i < pixels.length; i++){
@@ -809,7 +844,10 @@
     // (in log space) the further off it is in either direction.
     var aspectScore = Math.exp(-2 * Math.abs(Math.log(aspect / ID_CARD_ASPECT)));
 
-    return { rect: rect, score: fillRatio * 0.5 + aspectScore * 0.5 };
+    return {
+      rect: rect, score: fillRatio * 0.5 + aspectScore * 0.5,
+      minX: minX, maxX: maxX, minY: minY, maxY: maxY, bboxArea: bboxArea
+    };
   }
   function convexHull(points){
     var pts = points.slice().sort(function(a, b){ return a[0] - b[0] || a[1] - b[1]; });
@@ -912,6 +950,43 @@
     var maskCombined = new Uint8Array(cw * ch);
     for (var ci = 0; ci < cw * ch; ci++){ if (maskBright[ci] || maskSat[ci]) maskCombined[ci] = 1; }
 
+    // Every mask above segments by *color region*, which shares one blind
+    // spot: any part of the card whose color misses both the brightness and
+    // the saturation cutoff simply isn't in any mask, so the card gets
+    // truncated there (a dark green footer band is the usual culprit). And
+    // when the card sits on a surface close to its own tone — white card on
+    // a pale table — card and surface merge into one frame-spanning blob
+    // that gets rejected outright, leaving only the card's own interior
+    // blocks to compete. A card's *outer boundary* stays visible in both
+    // situations, so trace it directly: Sobel gradient magnitude lights up
+    // the border, closing joins it into a loop, and filling that loop yields
+    // the card as one solid region regardless of what colors are inside it.
+    var grad = new Float32Array(cw * ch);
+    for (var gy2 = 1; gy2 < ch - 1; gy2++){
+      for (var gx2 = 1; gx2 < cw - 1; gx2++){
+        var gi = gy2 * cw + gx2;
+        var gxv = -gray[gi-cw-1] - 2*gray[gi-1] - gray[gi+cw-1] + gray[gi-cw+1] + 2*gray[gi+1] + gray[gi+cw+1];
+        var gyv = -gray[gi-cw-1] - 2*gray[gi-cw] - gray[gi-cw+1] + gray[gi+cw-1] + 2*gray[gi+cw] + gray[gi+cw+1];
+        grad[gi] = Math.min(255, Math.sqrt(gxv*gxv + gyv*gyv));
+      }
+    }
+    var gradHist = new Array(256).fill(0);
+    for (var ghi = 0; ghi < grad.length; ghi++) gradHist[Math.max(0, Math.min(255, Math.round(grad[ghi])))]++;
+    // Deliberately well below Otsu's cut. Otsu splits the gradient histogram
+    // against the card's *interior* detail — QR blocks, text, the hard line
+    // where a colored band meets the white body — which is far punchier than
+    // the card's outer edge against a table. At Otsu's threshold only those
+    // interior edges survive, so the filled loop comes back as the card's
+    // white middle with its colored bands shaved off, and a card on a
+    // similarly-toned surface produces no outer boundary at all. Dropping to
+    // ~30% of it keeps the faint true border. Lower is not better: below
+    // ~0.2 background texture starts forming loops of its own (measured on a
+    // 21-image bench, 0.18 collapses the fabric-background case to 0.32 IoU
+    // where 0.30 holds 0.92).
+    var gradT = otsuThreshold(gradHist, grad.length) * 0.30;
+    var maskEdge = new Uint8Array(cw * ch);
+    for (var gmi = 0; gmi < grad.length; gmi++){ if (grad[gmi] > gradT) maskEdge[gmi] = 1; }
+
     // Close gaps — a card's printed interior (photo, QR code, text) otherwise
     // fragments into pieces smaller than a plain background blob right next
     // to it, causing the background to win by area alone. This also has to
@@ -930,10 +1005,15 @@
     // be wiped out in a single erosion pass even though nothing really moved
     // apart) without being anywhere near enough to reconnect a genuinely
     // distant outlier.
-    maskBright = morphClose(morphOpen(morphClose(maskBright, cw, ch, 5), cw, ch, 1), cw, ch, 1);
-    maskDark = morphClose(morphOpen(morphClose(maskDark, cw, ch, 5), cw, ch, 1), cw, ch, 1);
-    maskSat = morphClose(morphOpen(morphClose(maskSat, cw, ch, 5), cw, ch, 1), cw, ch, 1);
-    maskCombined = morphClose(morphOpen(morphClose(maskCombined, cw, ch, 5), cw, ch, 1), cw, ch, 1);
+    maskBright = fillHoles(morphClose(morphOpen(morphClose(maskBright, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
+    maskDark = fillHoles(morphClose(morphOpen(morphClose(maskDark, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
+    maskSat = fillHoles(morphClose(morphOpen(morphClose(maskSat, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
+    maskCombined = fillHoles(morphClose(morphOpen(morphClose(maskCombined, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
+    // The edge mask needs the opposite emphasis: close hard first so the
+    // border becomes an unbroken loop (a loop with even one gap leaks when
+    // filled and yields nothing), fill it, and only then open to drop the
+    // speckle that a textured surface scatters everywhere.
+    maskEdge = morphOpen(fillHoles(morphClose(maskEdge, cw, ch, 4), cw, ch), cw, ch, 2);
 
     // Consider several candidate blobs from brightness, saturation, and
     // their union (not just the single largest from one channel) and score
@@ -943,12 +1023,37 @@
     var candidates = topComponents(maskBright, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskBright }; })
       .concat(topComponents(maskDark, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskDark }; }))
       .concat(topComponents(maskSat, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskSat }; }))
-      .concat(topComponents(maskCombined, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskCombined }; }));
-    var best = null;
+      .concat(topComponents(maskCombined, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskCombined }; }))
+      .concat(topComponents(maskEdge, cw, ch, 3).map(function(p){ return { pixels: p, mask: maskEdge }; }));
+    var scored = [];
     candidates.forEach(function(cand){
       var evaluated = evaluateCandidate(cand.pixels, cand.mask, cw, ch, cw*ch);
-      if (evaluated && (!best || evaluated.score > best.score)) best = evaluated;
+      if (evaluated) scored.push(evaluated);
     });
+    // Drop candidates that sit (almost) entirely inside a substantially larger
+    // candidate — those are things printed ON the card, not the card. A QR
+    // code or a photo panel is a crisp filled rectangle, so on raw score it
+    // can beat the card that contains it; being contained is the signal that
+    // separates "part of the document" from "the document". Only the larger
+    // blob can absorb the smaller one, and the surrounding background can't
+    // swallow the card this way because a blob wrapping the whole frame is
+    // already rejected above.
+    var kept = scored.filter(function(x){
+      return !scored.some(function(y){
+        // 1.1x, not something larger: the pairs this has to separate are a
+        // card versus that same card with its colored end bands shaved off,
+        // which differ by well under 1.5x. The guard exists only so two
+        // near-identical blobs found by different masks don't cancel out.
+        if (y === x || y.bboxArea < x.bboxArea * 1.1) return false;
+        var ox = Math.min(x.maxX, y.maxX) - Math.max(x.minX, y.minX);
+        var oy = Math.min(x.maxY, y.maxY) - Math.max(x.minY, y.minY);
+        if (ox <= 0 || oy <= 0) return false;
+        return ox * oy >= 0.92 * (x.maxX - x.minX) * (x.maxY - x.minY);
+      });
+    });
+    var pool = kept.length ? kept : scored;
+    var best = null;
+    pool.forEach(function(ev){ if (!best || ev.score > best.score) best = ev; });
     if (!best) return fallback;
 
     var sx = w / cw, sy = h / ch;
