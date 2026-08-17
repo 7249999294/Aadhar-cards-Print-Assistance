@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aadhaar-print-v1';
+const CACHE_NAME = 'aadhaar-print-v2';
 const ASSETS = [
   './aadhaar-print-assistant.html',
   './manifest.json',
@@ -22,10 +22,19 @@ self.addEventListener('activate', function(event){
   self.clients.claim();
 });
 
+// Network-first: always try to fetch the latest deployed version when
+// online, only falling back to the cached copy if the request fails
+// (offline). This app gets updated often, so caching-first would leave
+// installed phones permanently stuck showing whatever version they first
+// loaded, no matter how many times the page is refreshed.
 self.addEventListener('fetch', function(event){
   event.respondWith(
-    caches.match(event.request).then(function(cached){
-      return cached || fetch(event.request);
+    fetch(event.request).then(function(response){
+      var copy = response.clone();
+      caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, copy); });
+      return response;
+    }).catch(function(){
+      return caches.match(event.request);
     })
   );
 });
