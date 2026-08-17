@@ -1029,28 +1029,29 @@
     var maskEdge = new Uint8Array(cw * ch);
     for (var gmi = 0; gmi < grad.length; gmi++){ if (grad[gmi] > gradT) maskEdge[gmi] = 1; }
 
-    // Close gaps — a card's printed interior (photo, QR code, text) otherwise
-    // fragments into pieces smaller than a plain background blob right next
-    // to it, causing the background to win by area alone. This also has to
-    // bridge a subtler gap: a dim/muted header-stripe color can land below
-    // BOTH the brightness and saturation cutoffs at once (too dark to read as
+    // Open BEFORE closing, and the order is the whole point. Opening erases
+    // anything thinner than its radius, so 3 iterations clear the bright
+    // flecks that a rough surface — asphalt, concrete, speckled stone —
+    // scatters around the card, while the card itself is orders of magnitude
+    // thicker and survives untouched. Closing first instead (as this did
+    // originally) welds those flecks onto the card before anything can
+    // remove them, and once they're a single solid mass no later opening can
+    // separate them again; the fitted rectangle then stretches out toward
+    // whichever flecks lie farthest away, which reads as corners sitting off
+    // the card and drifting toward the frame edges.
+    //
+    // Closing afterwards, at 5 iterations, spans gaps up to ~10px. That
+    // covers the card's printed interior (photo, QR code, text) so it doesn't
+    // fragment into pieces smaller than a neighbouring background blob, and
+    // also covers a subtler gap: a dim/muted band colour can fall below BOTH
+    // the brightness and saturation cutoffs at once (too dark to read as
     // "bright", too muted to read as "colorful"), leaving a real several-
-    // pixel-wide band that's unclassified by every mask, splitting the white
-    // body from the header above it. 5 iterations bridges gaps up to ~10px,
-    // comfortably covering that band. This is safe against re-welding a
-    // stray outlier back on: closing (dilate then erode by the same count)
-    // fills a gap but leaves an already-thin bridge close to its original
-    // width, since dilating it out and eroding it back by equal amounts
-    // roughly cancels — so the later opening pass below can still sever it.
-    // A final light closing re-heals any spot the opening pass just barely
-    // cut apart (e.g. a perfectly straight seam that's only one row thin can
-    // be wiped out in a single erosion pass even though nothing really moved
-    // apart) without being anywhere near enough to reconnect a genuinely
-    // distant outlier.
-    maskBright = fillHoles(morphClose(morphOpen(morphClose(maskBright, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
-    maskDark = fillHoles(morphClose(morphOpen(morphClose(maskDark, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
-    maskSat = fillHoles(morphClose(morphOpen(morphClose(maskSat, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
-    maskCombined = fillHoles(morphClose(morphOpen(morphClose(maskCombined, cw, ch, 5), cw, ch, 1), cw, ch, 1), cw, ch);
+    // pixel-wide strip that no mask claims, splitting the card's white body
+    // from the band at its end.
+    maskBright = fillHoles(morphClose(morphOpen(maskBright, cw, ch, 3), cw, ch, 5), cw, ch);
+    maskDark = fillHoles(morphClose(morphOpen(maskDark, cw, ch, 3), cw, ch, 5), cw, ch);
+    maskSat = fillHoles(morphClose(morphOpen(maskSat, cw, ch, 3), cw, ch, 5), cw, ch);
+    maskCombined = fillHoles(morphClose(morphOpen(maskCombined, cw, ch, 3), cw, ch, 5), cw, ch);
     // The edge mask needs the opposite emphasis: close hard first so the
     // border becomes an unbroken loop (a loop with even one gap leaks when
     // filled and yields nothing), fill it, and only then open to drop the
