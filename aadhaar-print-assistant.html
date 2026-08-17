@@ -135,6 +135,12 @@
   .crop-stage svg{display:block; touch-action:none; cursor:crosshair;}
   .crop-handle{fill:var(--accent); stroke:#fff; stroke-width:3; cursor:grab;}
   .crop-line{stroke:var(--accent); stroke-width:3; fill:rgba(47,111,237,0.12);}
+  .magnifier{
+    position:fixed; border:3px solid var(--accent); border-radius:50%;
+    box-shadow:0 4px 16px rgba(0,0,0,0.35); pointer-events:none; z-index:200;
+    background:#fff; display:none;
+  }
+  .magnifier.visible{display:block;}
 
   @media (max-width: 720px){
     body{overflow-y:auto; overflow-x:hidden;}
@@ -278,6 +284,7 @@
     <div class="crop-stage">
       <svg id="cropSvg" viewBox="0 0 100 100"></svg>
     </div>
+    <canvas id="magnifierCanvas" class="magnifier" width="150" height="150"></canvas>
     <div class="dialog-actions" style="justify-content:flex-start; margin-top:10px;">
       <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
     </div>
@@ -475,6 +482,7 @@
   var settingsBackdrop = $('settingsBackdrop'), settingsDone = $('settingsDone');
   var cropBackdrop = $('cropBackdrop'), cropSvg = $('cropSvg'), cropCancel = $('cropCancel'), cropApply = $('cropApply'), cropTitle = $('cropTitle');
   var rotateBtn = $('rotateBtn');
+  var magnifierCanvas = $('magnifierCanvas');
   var brightnessRange = $('brightnessRange'), contrastRange = $('contrastRange'), brightnessVal = $('brightnessVal'), contrastVal = $('contrastVal');
   var processingBackdrop = $('processingBackdrop'), processingLabel = $('processingLabel');
   var a4Preview = $('a4Preview'), frontSlot = $('frontSlot'), backSlot = $('backSlot');
@@ -926,7 +934,7 @@
       cropState = {
         target: target, imageSrc: dataUrl,
         natural: { w: img.naturalWidth, h: img.naturalHeight },
-        corners: corners, dragIdx: null,
+        corners: corners, dragIdx: null, imgEl: img,
       };
       cropTitle.textContent = 'Adjust the four corners of the card (' + (target === 'front' ? 'Front' : 'Back') + ')';
       brightnessRange.value = state.settings.brightness;
@@ -991,10 +999,48 @@
       var circle = document.createElementNS(svgns, 'circle');
       circle.setAttribute('class', 'crop-handle');
       circle.setAttribute('cx', pt[0]); circle.setAttribute('cy', pt[1]); circle.setAttribute('r', handleR);
-      circle.addEventListener('pointerdown', function(e){ e.preventDefault(); cropState.dragIdx = idx; });
+      circle.addEventListener('pointerdown', function(e){
+        e.preventDefault();
+        cropState.dragIdx = idx;
+        updateMagnifier(pt[0], pt[1], e.clientX, e.clientY);
+      });
       cropSvg.appendChild(circle);
     });
   }
+
+  // A finger covers the exact pixel it's touching, so while dragging a
+  // corner handle this shows a zoomed, crosshaired preview of that spot
+  // floating above the touch point (like iOS's text-selection loupe).
+  var MAGNIFIER_SIZE = 150, MAGNIFIER_ZOOM = 3;
+  function updateMagnifier(natX, natY, clientX, clientY){
+    var imgEl = cropState && cropState.imgEl;
+    if (!imgEl) return;
+    var ctx = magnifierCanvas.getContext('2d');
+    var half = (MAGNIFIER_SIZE / MAGNIFIER_ZOOM) / 2;
+    ctx.clearRect(0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(MAGNIFIER_SIZE / 2, MAGNIFIER_SIZE / 2, MAGNIFIER_SIZE / 2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.filter = 'brightness(' + (state.settings.brightness / 100) + ') contrast(' + (state.settings.contrast / 100) + ')';
+    ctx.drawImage(imgEl, natX - half, natY - half, half * 2, half * 2, 0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(217,45,32,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(MAGNIFIER_SIZE / 2 - 12, MAGNIFIER_SIZE / 2); ctx.lineTo(MAGNIFIER_SIZE / 2 + 12, MAGNIFIER_SIZE / 2);
+    ctx.moveTo(MAGNIFIER_SIZE / 2, MAGNIFIER_SIZE / 2 - 12); ctx.lineTo(MAGNIFIER_SIZE / 2, MAGNIFIER_SIZE / 2 + 12);
+    ctx.stroke();
+
+    var left = clientX - MAGNIFIER_SIZE / 2;
+    left = Math.max(8, Math.min(window.innerWidth - MAGNIFIER_SIZE - 8, left));
+    var top = clientY - MAGNIFIER_SIZE - 30; // float above the finger
+    if (top < 8) top = clientY + 30; // not enough room above — show below instead
+    magnifierCanvas.style.left = left + 'px';
+    magnifierCanvas.style.top = top + 'px';
+    magnifierCanvas.classList.add('visible');
+  }
+  function hideMagnifier(){ magnifierCanvas.classList.remove('visible'); }
 
   window.addEventListener('pointermove', function(e){
     if (!cropState || cropState.dragIdx === null) return;
@@ -1005,10 +1051,14 @@
     x = Math.max(0, Math.min(vb.w, x)); y = Math.max(0, Math.min(vb.h, y));
     cropState.corners[cropState.dragIdx] = [x, y];
     renderCropSvg();
+    updateMagnifier(x, y, e.clientX, e.clientY);
   });
-  window.addEventListener('pointerup', function(){ if (cropState) cropState.dragIdx = null; });
+  window.addEventListener('pointerup', function(){
+    if (cropState) cropState.dragIdx = null;
+    hideMagnifier();
+  });
 
-  cropCancel.addEventListener('click', function(){ cropState = null; cropBackdrop.hidden = true; });
+  cropCancel.addEventListener('click', function(){ cropState = null; cropBackdrop.hidden = true; hideMagnifier(); });
 
   function rotateImage90(dataUrl, srcW, srcH){
     return new Promise(function(resolve){
@@ -1034,6 +1084,7 @@
       cropState.natural = { w: res.w, h: res.h };
       var img = new Image();
       img.onload = function(){
+        cropState.imgEl = img;
         cropState.corners = autoDetectCorners(img);
         renderCropSvg();
         rotateBtn.disabled = false;
@@ -1044,6 +1095,7 @@
 
   cropApply.addEventListener('click', function(){
     if (!cropState) return;
+    hideMagnifier();
     var target = cropState.target;
     var corners = cropState.corners;
     var imageSrc = cropState.imageSrc;
