@@ -31,22 +31,35 @@
     border-bottom:2px solid var(--border); padding-bottom:10px; flex-shrink:0;
   }
   header h1{font-size:20px; margin:0; letter-spacing:0.02em; font-weight:700;}
-  .brand-tag{font-size:11px; color:var(--muted); font-weight:600; letter-spacing:0.03em; margin-left:6px;}
   .header-right{display:flex; flex-direction:column; align-items:flex-end; gap:2px;}
-  #statusLine{font-size:14px; color:var(--muted); font-weight:600;}
   #trialBanner{color:var(--danger); font-weight:700;}
-  .print-counters{display:flex; gap:6px; margin-bottom:2px;}
-  .counter-pill{
-    background:var(--accent-100); color:var(--accent-dark); font-size:11px; font-weight:700;
-    padding:3px 9px; border-radius:12px; letter-spacing:0.02em; white-space:nowrap;
-  }
-  .counter-pill strong{font-weight:800;}
-  .auth-status{display:flex; align-items:center; gap:8px; margin-bottom:2px;}
-  .auth-status .btn{padding:4px 10px; font-size:11px;}
+  .header-top-row{display:flex; align-items:center; gap:10px;}
+  .header-logo{width:28px; height:28px; border-radius:6px; display:block;}
+  .header-top-row .btn{padding:4px 10px; font-size:11px;}
+  .profile-chip{display:flex; align-items:center; gap:6px;}
+  .profile-avatar{font-size:16px; line-height:1;}
   #userEmailText{font-size:11px; font-weight:600; color:var(--muted);}
   .auth-divider{text-align:center; font-size:11px; color:var(--muted); margin:12px 0;}
   .google-btn{
     width:100%; display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  .counter-widget{
+    position:fixed; left:16px; bottom:16px; z-index:40; display:flex; gap:18px;
+    background:rgba(255,255,255,0.92); padding:10px 14px; border-radius:10px;
+    box-shadow:0 2px 12px rgba(0,0,0,0.15); backdrop-filter:blur(4px);
+  }
+  .counter-group{display:flex; flex-direction:column; align-items:center; gap:4px;}
+  .counter-label{font-size:11px; font-weight:800; color:var(--text); letter-spacing:0.02em;}
+  .flip-tiles{display:flex; gap:3px;}
+  .flip-tile{
+    position:relative; min-width:18px; height:26px; padding:0 2px; background:#1a1a1a; color:#fff;
+    border-radius:3px; display:flex; align-items:center; justify-content:center;
+    font-weight:800; font-size:15px; font-variant-numeric:tabular-nums;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,0.15), 0 1px 2px rgba(0,0,0,0.4);
+  }
+  .flip-tile::after{
+    content:''; position:absolute; left:0; right:0; top:50%; height:1px;
+    background:rgba(0,0,0,0.55);
   }
   main{flex:1; min-height:0; display:grid; grid-template-columns:1fr 300px; gap:16px;}
   aside.left{display:flex; flex-direction:column; gap:12px; min-height:0;}
@@ -156,6 +169,10 @@
     .dialog.wide{width:96vw;}
     .btn{padding:14px; font-size:15px;}
     .camera-btn, .gallery-btn{padding:10px 12px; font-size:13px;}
+    /* position:fixed would float over the Print/Clear buttons once the page
+       scrolls on mobile (there's no dead space at the corner like on
+       desktop) — render it as a normal block at the end of the page instead. */
+    .counter-widget{position:static; width:fit-content; margin:16px 0 0;}
   }
 
   #printRoot{display:none;}
@@ -173,20 +190,18 @@
 
 <div id="app">
   <header>
-    <h1>AADHAAR PRINT ASSISTANT <span class="brand-tag">by Aamantran Print</span></h1>
+    <h1>AADHAAR PRINT ASSISTANT</h1>
     <div class="header-right">
-      <div class="print-counters">
-        <span class="counter-pill">TODAY <strong id="todayPrintCount">0</strong></span>
-        <span class="counter-pill">TOTAL <strong id="totalPrintCount">0</strong></span>
-      </div>
-      <div class="auth-status">
+      <div class="header-top-row">
+        <img src="icons/icon-192.png" class="header-logo" alt="Aadhaar Print Assistant">
         <button class="btn ghost small" id="signInBtn">SIGN IN</button>
-        <span id="userChip" hidden>
+        <span id="userChip" hidden class="profile-chip">
+          <span class="profile-avatar">👤</span>
           <span id="userEmailText"></span>
           <button class="btn ghost small" id="signOutBtn">SIGN OUT</button>
         </span>
       </div>
-      <span id="statusLine">Paste Aadhaar Front — Ctrl + V</span>
+      <span id="statusLine" hidden>Paste Aadhaar Front — Ctrl + V</span>
       <span id="trialBanner" class="hint" hidden></span>
     </div>
   </header>
@@ -263,6 +278,17 @@
   </main>
 </div>
 
+<div class="counter-widget">
+  <div class="counter-group">
+    <div class="counter-label">Today</div>
+    <div class="flip-tiles" id="todayTiles"></div>
+  </div>
+  <div class="counter-group">
+    <div class="counter-label">All Time</div>
+    <div class="flip-tiles" id="totalTiles"></div>
+  </div>
+</div>
+
 <div class="dialog-backdrop" id="settingsBackdrop" hidden>
   <div class="dialog">
     <h2>Template settings</h2>
@@ -274,7 +300,10 @@
       <label class="field">Back X (mm)<input class="input" type="number" step="0.1" id="setBX"></label>
       <label class="field">Back Y (mm)<input class="input" type="number" step="0.1" id="setBY"></label>
     </div>
-    <div class="dialog-actions"><button class="btn primary" id="settingsDone">DONE</button></div>
+    <div class="dialog-actions" style="justify-content:space-between;">
+      <button class="btn ghost" id="settingsSetDefault">SET AS DEFAULT</button>
+      <button class="btn primary" id="settingsDone">DONE</button>
+    </div>
   </div>
 </div>
 
@@ -388,9 +417,19 @@
       localStorage.setItem(COUNT_TODAY_KEY, String(c.today));
     }catch(e){}
   }
+  function renderDigitTiles(container, number){
+    var str = String(number);
+    container.innerHTML = '';
+    for (var i = 0; i < str.length; i++){
+      var tile = document.createElement('div');
+      tile.className = 'flip-tile';
+      tile.textContent = str[i];
+      container.appendChild(tile);
+    }
+  }
   function renderCounters(){
-    todayPrintCountEl.textContent = counters.today;
-    totalPrintCountEl.textContent = counters.total;
+    renderDigitTiles(todayTilesEl, counters.today);
+    renderDigitTiles(totalTilesEl, counters.total);
   }
   function incrementPrintCount(n){
     // Roll over to a fresh "today" count if the app was left open across midnight.
@@ -491,7 +530,7 @@
   var licenseLock = $('licenseLock'), trialMsg = $('trialMsg'), trialBanner = $('trialBanner');
   var licenseNameInput = $('licenseNameInput'), licenseKeyInput = $('licenseKeyInput');
   var licenseError = $('licenseError'), licenseActivateBtn = $('licenseActivateBtn');
-  var todayPrintCountEl = $('todayPrintCount'), totalPrintCountEl = $('totalPrintCount');
+  var todayTilesEl = $('todayTiles'), totalTilesEl = $('totalTiles');
   var counters = loadCounters();
 
   // ---------- linear algebra for perspective correction ----------
@@ -1275,8 +1314,8 @@
     settingsBackdrop.hidden = false;
   }
   settingsBtn.addEventListener('click', openSettings);
-  settingsDone.addEventListener('click', function(){
-    var s = Object.assign({}, state.settings, {
+  function settingsFromInputs(){
+    return Object.assign({}, state.settings, {
       aadhaarW: parseFloat($('setW').value) || state.settings.aadhaarW,
       aadhaarH: parseFloat($('setH').value) || state.settings.aadhaarH,
       frontX: parseFloat($('setFX').value) || 0,
@@ -1284,10 +1323,29 @@
       backX: parseFloat($('setBX').value) || 0,
       backY: parseFloat($('setBY').value) || 0,
     });
+  }
+  settingsDone.addEventListener('click', function(){
+    var s = settingsFromInputs();
     state.settings = s;
     saveSettings(s);
     settingsBackdrop.hidden = true;
     render();
+  });
+  var settingsSetDefault = $('settingsSetDefault');
+  settingsSetDefault.addEventListener('click', function(){
+    var s = settingsFromInputs();
+    state.settings = s;
+    saveSettings(s);
+    render();
+    // Brief confirmation without closing the dialog, so template values can
+    // keep being fine-tuned after locking them in as the new default.
+    var original = settingsSetDefault.textContent;
+    settingsSetDefault.textContent = 'SAVED ✓';
+    settingsSetDefault.disabled = true;
+    setTimeout(function(){
+      settingsSetDefault.textContent = original;
+      settingsSetDefault.disabled = false;
+    }, 1200);
   });
 
   // ---------- copies ----------
