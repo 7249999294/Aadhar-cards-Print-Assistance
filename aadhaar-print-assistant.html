@@ -69,6 +69,7 @@
   }
   .paste-zone .big{font-size:13px; font-weight:700;}
   .paste-zone .small{font-size:11px; color:var(--muted);}
+  .capture-btn-row{display:flex; gap:8px; margin-top:2px;}
   .panel-img{width:100%; height:100%; object-fit:contain; display:block;}
   .panel-meta{padding:6px 10px; font-size:12px; color:var(--muted); flex-shrink:0; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:8px;}
   .edit-panel-btn{padding:4px 10px; font-size:11px;}
@@ -148,7 +149,7 @@
     .slider-row{flex-direction:column; gap:12px;}
     .dialog.wide{width:96vw;}
     .btn{padding:14px; font-size:15px;}
-    .browse-btn{padding:10px 16px; font-size:13px;}
+    .camera-btn, .gallery-btn{padding:10px 12px; font-size:13px;}
   }
 
   #printRoot{display:none;}
@@ -204,9 +205,13 @@
           <div class="paste-zone">
             <div class="big">PASTE IMAGE</div>
             <div class="small">Ctrl + V, drag &amp; drop, or</div>
-            <button type="button" class="btn ghost small browse-btn">BROWSE / CAMERA</button>
+            <div class="capture-btn-row">
+              <button type="button" class="btn ghost small camera-btn">📷 CAMERA</button>
+              <button type="button" class="btn ghost small gallery-btn">🖼️ GALLERY</button>
+            </div>
           </div>
-          <input type="file" accept="image/*" class="file-input" hidden>
+          <input type="file" accept="image/*,.heic,.heif" capture="environment" class="camera-input" hidden>
+          <input type="file" accept="image/*,.heic,.heif" class="gallery-input" hidden>
           <img class="panel-img" hidden>
         </div>
         <div class="panel-meta">
@@ -221,9 +226,13 @@
           <div class="paste-zone">
             <div class="big">PASTE IMAGE</div>
             <div class="small">Ctrl + V, drag &amp; drop, or</div>
-            <button type="button" class="btn ghost small browse-btn">BROWSE / CAMERA</button>
+            <div class="capture-btn-row">
+              <button type="button" class="btn ghost small camera-btn">📷 CAMERA</button>
+              <button type="button" class="btn ghost small gallery-btn">🖼️ GALLERY</button>
+            </div>
           </div>
-          <input type="file" accept="image/*" class="file-input" hidden>
+          <input type="file" accept="image/*,.heic,.heif" capture="environment" class="camera-input" hidden>
+          <input type="file" accept="image/*,.heic,.heif" class="gallery-input" hidden>
           <img class="panel-img" hidden>
         </div>
         <div class="panel-meta">
@@ -831,7 +840,11 @@
   }
 
   function handleImageFile(file, target){
-    if (!file || file.type.indexOf('image/') !== 0){ showError('Please use an image file.'); return; }
+    // Some phones report HEIC/HEIF photos with a blank or generic MIME type
+    // instead of "image/heic", so fall back to checking the file extension
+    // rather than rejecting the file outright.
+    var looksLikeImage = file && (file.type.indexOf('image/') === 0 || /\.(heic|heif|jpe?g|png|webp|gif|bmp)$/i.test(file.name || ''));
+    if (!looksLikeImage){ showError('Please use an image file.'); return; }
     var reader = new FileReader();
     reader.onload = function(){ startCrop(target, reader.result); };
     reader.readAsDataURL(file);
@@ -873,29 +886,40 @@
   });
 
   // Ctrl+V paste and drag-and-drop both need a keyboard/mouse desktop, so on
-  // mobile (no physical keyboard, no cross-app drag) this button + hidden
-  // file input is the only way in — it opens the OS's native gallery/camera
-  // picker and reuses the same handleImageFile() path as paste/drop.
-  document.querySelectorAll('.browse-btn').forEach(function(btn){
-    btn.addEventListener('click', function(e){
-      e.stopPropagation();
-      if (cropState) return;
-      var panel = btn.closest('.panel');
-      panel.querySelector('.file-input').click();
+  // mobile (no physical keyboard, no cross-app drag) these buttons + hidden
+  // file inputs are the only way in. Two separate inputs rather than one:
+  // the camera one has capture="environment" to jump straight to the camera
+  // (and camera photos are always plain JPEG, sidestepping HEIC issues),
+  // while the gallery one has no capture attribute so the OS shows its
+  // normal photo picker. Both reuse the same handleImageFile() path as
+  // paste/drop.
+  function wireCaptureButton(btnClass, inputClass){
+    document.querySelectorAll(btnClass).forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        if (cropState) return;
+        var panel = btn.closest('.panel');
+        panel.querySelector(inputClass).click();
+      });
     });
-  });
-  document.querySelectorAll('.file-input').forEach(function(input){
-    var side = input.closest('.panel').getAttribute('data-side');
-    input.addEventListener('change', function(e){
-      var file = e.target.files && e.target.files[0];
-      input.value = ''; // allow re-selecting the same file later
-      if (file) handleImageFile(file, side);
+    document.querySelectorAll(inputClass).forEach(function(input){
+      var side = input.closest('.panel').getAttribute('data-side');
+      input.addEventListener('change', function(e){
+        var file = e.target.files && e.target.files[0];
+        input.value = ''; // allow re-selecting the same file later
+        if (file) handleImageFile(file, side);
+      });
     });
-  });
+  }
+  wireCaptureButton('.camera-btn', '.camera-input');
+  wireCaptureButton('.gallery-btn', '.gallery-input');
 
   // ---------- crop dialog ----------
   function startCrop(target, dataUrl, presetCorners){
     var img = new Image();
+    img.onerror = function(){
+      showError('Could not open this photo — try a JPG or PNG (some phones save HEIC photos that browsers can\'t read directly). Using the Camera button usually avoids this.');
+    };
     img.onload = function(){
       printError.hidden = true;
       var corners = presetCorners || autoDetectCorners(img);
