@@ -51,16 +51,17 @@
   }
 
   .dialog.auth-dialog-split{
-    width:760px; max-width:94vw; padding:0; display:grid;
-    grid-template-columns:0.85fr 1.15fr; overflow:hidden; position:relative;
+    width:940px; max-width:96vw; padding:0; display:grid;
+    grid-template-columns:0.9fr 1.1fr; overflow:hidden; position:relative;
   }
   .auth-side-panel{
     background-image:url('icons/auth-banner.png');
     background-size:cover; background-position:top center; background-repeat:no-repeat;
     min-height:100%;
   }
-  .auth-form-panel{padding:32px 30px 28px; position:relative; text-align:left;}
-  .auth-form-panel h2{margin:0 0 20px; font-size:22px; text-align:left;}
+  .auth-form-panel{padding:44px 44px 36px; position:relative; text-align:left;}
+  .auth-form-panel h2{margin:0 0 20px; font-size:22px; text-align:center;}
+  .auth-form-logo{width:48px; height:48px; border-radius:10px; display:block; margin:0 auto 16px;}
   .auth-close{
     position:absolute; top:10px; right:12px; background:none; border:none;
     font-size:16px; color:var(--muted); cursor:pointer; z-index:2; line-height:1; padding:6px;
@@ -401,6 +402,7 @@
     <button type="button" class="auth-close" id="authClose" aria-label="Close">✕</button>
     <div class="auth-side-panel"></div>
     <div class="auth-form-panel">
+      <img src="icons/icon-192.png" class="auth-form-logo" alt="Aadhaar Print Assistant">
       <h2 id="authTitle">Sign In</h2>
 
       <label class="icon-field">
