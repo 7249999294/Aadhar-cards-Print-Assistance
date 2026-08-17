@@ -35,6 +35,12 @@
   .header-right{display:flex; flex-direction:column; align-items:flex-end; gap:2px;}
   #statusLine{font-size:14px; color:var(--muted); font-weight:600;}
   #trialBanner{color:var(--danger); font-weight:700;}
+  .print-counters{display:flex; gap:6px; margin-bottom:2px;}
+  .counter-pill{
+    background:var(--accent-100); color:var(--accent-dark); font-size:11px; font-weight:700;
+    padding:3px 9px; border-radius:12px; letter-spacing:0.02em; white-space:nowrap;
+  }
+  .counter-pill strong{font-weight:800;}
   main{flex:1; min-height:0; display:grid; grid-template-columns:1fr 300px; gap:16px;}
   aside.left{display:flex; flex-direction:column; gap:12px; min-height:0;}
 
@@ -154,6 +160,10 @@
   <header>
     <h1>AADHAAR PRINT ASSISTANT <span class="brand-tag">by Aamantran Print</span></h1>
     <div class="header-right">
+      <div class="print-counters">
+        <span class="counter-pill">TODAY <strong id="todayPrintCount">0</strong></span>
+        <span class="counter-pill">TOTAL <strong id="totalPrintCount">0</strong></span>
+      </div>
       <span id="statusLine">Paste Aadhaar Front — Ctrl + V</span>
       <span id="trialBanner" class="hint" hidden></span>
     </div>
@@ -300,6 +310,43 @@
   }
   function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
 
+  // ---------- print counters (today / all-time) ----------
+  var COUNT_TOTAL_KEY = 'aadhaar-print-count-total';
+  var COUNT_TODAY_KEY = 'aadhaar-print-count-today';
+  var COUNT_TODAY_DATE_KEY = 'aadhaar-print-count-today-date';
+
+  function todayDateString(){
+    var d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+  function loadCounters(){
+    var total = parseInt(localStorage.getItem(COUNT_TOTAL_KEY) || '0', 10) || 0;
+    var today = todayDateString();
+    var todayCount = localStorage.getItem(COUNT_TODAY_DATE_KEY) === today
+      ? (parseInt(localStorage.getItem(COUNT_TODAY_KEY) || '0', 10) || 0)
+      : 0;
+    return { total: total, today: todayCount };
+  }
+  function saveCounters(c){
+    try{
+      localStorage.setItem(COUNT_TOTAL_KEY, String(c.total));
+      localStorage.setItem(COUNT_TODAY_DATE_KEY, todayDateString());
+      localStorage.setItem(COUNT_TODAY_KEY, String(c.today));
+    }catch(e){}
+  }
+  function renderCounters(){
+    todayPrintCountEl.textContent = counters.today;
+    totalPrintCountEl.textContent = counters.total;
+  }
+  function incrementPrintCount(n){
+    // Roll over to a fresh "today" count if the app was left open across midnight.
+    if (localStorage.getItem(COUNT_TODAY_DATE_KEY) !== todayDateString()) counters.today = 0;
+    counters.total += n;
+    counters.today += n;
+    saveCounters(counters);
+    renderCounters();
+  }
+
   // ---------- licensing (trial + signed license key) ----------
   // The tool works free for TRIAL_DAYS. After that it locks until a valid
   // license key is entered. Keys are ECDSA signatures produced offline by a
@@ -380,6 +427,8 @@
   var licenseLock = $('licenseLock'), trialMsg = $('trialMsg'), trialBanner = $('trialBanner');
   var licenseNameInput = $('licenseNameInput'), licenseKeyInput = $('licenseKeyInput');
   var licenseError = $('licenseError'), licenseActivateBtn = $('licenseActivateBtn');
+  var todayPrintCountEl = $('todayPrintCount'), totalPrintCountEl = $('totalPrintCount');
+  var counters = loadCounters();
 
   // ---------- linear algebra for perspective correction ----------
   function gaussianSolve8(A, b){
@@ -1022,6 +1071,7 @@
   window.addEventListener('afterprint', function(){
     if (!state.printPending) return;
     state.printPending = false;
+    incrementPrintCount(state.copies);
     processingBackdrop.hidden = false;
     processingLabel.textContent = 'Printed successfully ✓';
     setTimeout(function(){
@@ -1054,6 +1104,7 @@
 
   // ---------- initial ----------
   render();
+  renderCounters();
 
   // ---------- resize ----------
   try{
