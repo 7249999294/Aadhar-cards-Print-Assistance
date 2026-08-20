@@ -1,3 +1,10 @@
 .firebase/
 license-key-generator.html
 android-build/
+
+# training artefacts — 30k generated images and checkpoints, regenerable from
+# synth.py and never worth committing. The trained .onnx is deliberately NOT
+# ignored: that one ships with the app.
+ml/data/
+ml/*.pt
+__pycache__/
