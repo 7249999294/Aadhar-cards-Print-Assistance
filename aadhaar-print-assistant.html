@@ -365,9 +365,11 @@
       <svg id="cropSvg" viewBox="0 0 100 100"></svg>
     </div>
     <canvas id="magnifierCanvas" class="magnifier" width="150" height="150"></canvas>
-    <div class="dialog-actions" style="justify-content:flex-start; margin-top:10px;">
+    <div class="dialog-actions" style="justify-content:flex-start; margin-top:10px; gap:8px;">
       <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
+      <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS</button>
     </div>
+    <p class="hint" id="tapHint" hidden style="margin:8px 0 0;"></p>
     <div class="slider-row">
       <label class="field">
         <span>Brightness <span id="brightnessVal"></span>%</span>
@@ -596,6 +598,7 @@
   var settingsBackdrop = $('settingsBackdrop'), settingsDone = $('settingsDone');
   var cropBackdrop = $('cropBackdrop'), cropSvg = $('cropSvg'), cropCancel = $('cropCancel'), cropApply = $('cropApply'), cropTitle = $('cropTitle');
   var rotateBtn = $('rotateBtn');
+  var tapCornersBtn = $('tapCornersBtn'), tapHint = $('tapHint');
   var magnifierCanvas = $('magnifierCanvas');
   var brightnessRange = $('brightnessRange'), contrastRange = $('contrastRange'), brightnessVal = $('brightnessVal'), contrastVal = $('contrastVal');
   var processingBackdrop = $('processingBackdrop'), processingLabel = $('processingLabel');
@@ -1440,6 +1443,7 @@
         target: target, imageSrc: dataUrl,
         natural: { w: img.naturalWidth, h: img.naturalHeight },
         corners: corners, dragIdx: null, imgEl: img,
+        tapPts: null, tapProvisional: null,
       };
       cropTitle.textContent = 'Adjust the four corners of the card (' + (target === 'front' ? 'Front' : 'Back') + ')';
       brightnessRange.value = state.settings.brightness;
@@ -1448,6 +1452,7 @@
       contrastVal.textContent = state.settings.contrast;
       cropBackdrop.hidden = false;
       renderCropSvg();
+      updateTapUI();
     };
     img.src = dataUrl;
   }
@@ -1497,6 +1502,36 @@
     image.setAttribute('width', nw); image.setAttribute('height', nh);
     image.setAttribute('style', 'filter:brightness(' + (state.settings.brightness/100) + ') contrast(' + (state.settings.contrast/100) + ')');
     cropSvg.appendChild(image);
+
+    // Tap mode draws only what has been tapped so far — the old quadrilateral
+    // and its handles are hidden, because the whole point of this mode is that
+    // the automatic guess was wrong and dragging four handles across the photo
+    // is slower than simply pointing at the corners.
+    if (cropState.tapPts){
+      var shown = cropState.tapPts.concat(cropState.tapProvisional ? [cropState.tapProvisional] : []);
+      if (shown.length >= 2){
+        var pl = document.createElementNS(svgns, 'polyline');
+        pl.setAttribute('class', 'crop-line');
+        pl.setAttribute('fill', 'none');
+        pl.setAttribute('points', shown.map(function(p){ return p.join(','); }).join(' '));
+        cropSvg.appendChild(pl);
+      }
+      shown.forEach(function(p, i){
+        var c = document.createElementNS(svgns, 'circle');
+        c.setAttribute('class', 'crop-handle');
+        c.setAttribute('cx', p[0]); c.setAttribute('cy', p[1]); c.setAttribute('r', handleR);
+        cropSvg.appendChild(c);
+        var t = document.createElementNS(svgns, 'text');
+        t.setAttribute('x', p[0]); t.setAttribute('y', p[1] + handleR * 0.45);
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('style', 'fill:#fff; font-weight:700; pointer-events:none; font-size:' +
+                       (handleR * 1.25) + 'px;');
+        t.textContent = String(i + 1);
+        cropSvg.appendChild(t);
+      });
+      return;
+    }
+
     var poly = document.createElementNS(svgns, 'polygon');
     poly.setAttribute('class', 'crop-line'); poly.setAttribute('points', pts);
     cropSvg.appendChild(poly);
@@ -1547,18 +1582,91 @@
   }
   function hideMagnifier(){ magnifierCanvas.classList.remove('visible'); }
 
-  window.addEventListener('pointermove', function(e){
-    if (!cropState || cropState.dragIdx === null) return;
+  // ---------- tap the four corners ----------
+  // When auto-detect lands badly wrong, dragging four handles from wherever
+  // they happened to land is slow. Pointing at each corner is not.
+  function svgPointFromEvent(e){
     var rect = cropSvg.getBoundingClientRect();
     var vb = cropState.natural;
     var x = ((e.clientX - rect.left) / rect.width) * vb.w;
     var y = ((e.clientY - rect.top) / rect.height) * vb.h;
-    x = Math.max(0, Math.min(vb.w, x)); y = Math.max(0, Math.min(vb.h, y));
-    cropState.corners[cropState.dragIdx] = [x, y];
+    return [Math.max(0, Math.min(vb.w, x)), Math.max(0, Math.min(vb.h, y))];
+  }
+  // Taps are accepted in ANY order and sorted here, so the operator never has
+  // to remember which corner comes first. Sorting by angle about the centre
+  // gives a non-self-intersecting quad; starting from the smallest x+y then
+  // matches the ordering auto-detect already produces, so everything
+  // downstream (perspective correction, rotate) behaves identically.
+  function orderQuad(p){
+    var cx = 0, cy = 0;
+    p.forEach(function(q){ cx += q[0]; cy += q[1]; });
+    cx /= p.length; cy /= p.length;
+    var s = p.slice().sort(function(a, b){
+      return Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx);
+    });
+    var start = 0, best = Infinity;
+    for (var i = 0; i < 4; i++){
+      var v = s[i][0] + s[i][1];
+      if (v < best){ best = v; start = i; }
+    }
+    var out = [];
+    for (var k = 0; k < 4; k++) out.push(s[(start + k) % 4]);
+    return out;
+  }
+  function updateTapUI(){
+    if (cropState && cropState.tapPts){
+      tapHint.hidden = false;
+      tapHint.textContent = 'Tap corner ' + (cropState.tapPts.length + 1) +
+        ' of 4 — any order. Hold and slide to place it exactly, then lift.';
+      tapCornersBtn.textContent = '✕ CANCEL TAPPING';
+    } else {
+      tapHint.hidden = true;
+      tapCornersBtn.textContent = '👆 TAP 4 CORNERS';
+    }
+  }
+  tapCornersBtn.addEventListener('click', function(){
+    if (!cropState) return;
+    cropState.tapPts = cropState.tapPts ? null : [];
+    cropState.tapProvisional = null;
+    hideMagnifier();
     renderCropSvg();
-    updateMagnifier(x, y, e.clientX, e.clientY);
+    updateTapUI();
+  });
+  cropSvg.addEventListener('pointerdown', function(e){
+    if (!cropState || !cropState.tapPts) return;
+    e.preventDefault();
+    cropState.tapProvisional = svgPointFromEvent(e);
+    renderCropSvg();
+    updateMagnifier(cropState.tapProvisional[0], cropState.tapProvisional[1], e.clientX, e.clientY);
+  });
+
+  window.addEventListener('pointermove', function(e){
+    if (!cropState) return;
+    // placing a tapped corner: the point follows the finger until it lifts,
+    // so it can be nudged onto the exact spot while the loupe shows it
+    if (cropState.tapPts && cropState.tapProvisional){
+      cropState.tapProvisional = svgPointFromEvent(e);
+      renderCropSvg();
+      updateMagnifier(cropState.tapProvisional[0], cropState.tapProvisional[1], e.clientX, e.clientY);
+      return;
+    }
+    if (cropState.dragIdx === null) return;
+    var p = svgPointFromEvent(e);
+    cropState.corners[cropState.dragIdx] = p;
+    renderCropSvg();
+    updateMagnifier(p[0], p[1], e.clientX, e.clientY);
   });
   window.addEventListener('pointerup', function(){
+    if (cropState && cropState.tapPts && cropState.tapProvisional){
+      cropState.tapPts.push(cropState.tapProvisional);
+      cropState.tapProvisional = null;
+      if (cropState.tapPts.length === 4){
+        cropState.corners = orderQuad(cropState.tapPts);
+        cropState.tapPts = null;      // back to the normal drag-to-adjust view
+      }
+      renderCropSvg();
+      updateTapUI();
+    }
     if (cropState) cropState.dragIdx = null;
     hideMagnifier();
   });
