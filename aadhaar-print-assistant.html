@@ -193,10 +193,47 @@
   .grid2{display:grid; grid-template-columns:1fr 1fr; gap:10px 14px;}
   .dialog-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:16px;}
   .hint{font-size:12px; color:var(--muted); margin:10px 0 0;}
-  .crop-stage{display:flex; justify-content:center; align-items:center; background:var(--bg); border-radius:8px; padding:10px;}
+  .crop-stage{display:flex; justify-content:center; align-items:center; background:var(--bg); border-radius:8px; padding:10px; min-width:0;}
   .slider-row{display:flex; gap:20px; margin-top:14px;}
   .slider-row .field{flex:1;}
   .slider-row input[type=range]{width:100%; accent-color:var(--accent);}
+
+  /* Phone photos are portrait, so a single-column crop dialog leaves wide
+     empty margins either side of the image and then stacks every control
+     underneath it, pushing Apply below the fold. Putting the controls into
+     that otherwise-dead column instead lets the photo render considerably
+     larger, which is what actually matters when placing corners precisely. */
+  /* width:auto so the dialog hugs the photo. A portrait phone photo is
+     height-limited, so a fixed-width dialog would frame it with a wide band
+     of empty grey — the very thing this layout is meant to remove. */
+  .dialog.crop-dialog{width:auto; max-width:min(1020px, 96vw);}
+  .crop-layout{display:grid; grid-template-columns:auto 250px; gap:18px; align-items:stretch;}
+  .crop-side{display:flex; flex-direction:column; gap:18px; min-width:0;}
+  .crop-group{display:flex; flex-direction:column; gap:8px;}
+  .crop-group .btn{width:100%;}
+  .crop-sliders{gap:14px;}
+  .crop-sliders .field{gap:6px;}
+  .crop-sliders input[type=range]{width:100%; accent-color:var(--accent);}
+  .crop-side .hint{margin:2px 0 0;}
+  /* pinned to the bottom of the column so Apply sits in the same place
+     regardless of how tall the photo is */
+  .crop-actions{display:flex; flex-direction:column; gap:8px; margin-top:auto;}
+  .crop-actions .btn{width:100%;}
+
+  @media (max-width: 860px){
+    .dialog.crop-dialog{width:96vw;}
+    .crop-layout{grid-template-columns:1fr; gap:14px;}
+    .crop-group{flex-direction:row; align-items:center; flex-wrap:wrap;}
+    .crop-group .btn{width:auto; flex:1;}
+    .crop-side .hint{order:99; flex-basis:100%;}
+    .crop-sliders{flex-direction:row; gap:18px;}
+    .crop-sliders .field{flex:1;}
+    /* row-reverse, so the DOM keeps Apply first (it leads the sidebar column
+       on desktop) while on a phone it lands rightmost, where the primary
+       action belongs under the thumb */
+    .crop-actions{flex-direction:row-reverse; justify-content:flex-start; margin-top:0;}
+    .crop-actions .btn{width:auto; min-width:120px;}
+  }
   .crop-stage svg{display:block; touch-action:none; cursor:crosshair;}
   .crop-handle{fill:var(--accent); stroke:#fff; stroke-width:3; cursor:grab;}
   .crop-line{stroke:var(--accent); stroke-width:3; fill:rgba(47,111,237,0.12);}
@@ -362,31 +399,35 @@
 </div>
 
 <div class="dialog-backdrop" id="cropBackdrop" hidden>
-  <div class="dialog wide">
+  <div class="dialog crop-dialog">
     <h2 id="cropTitle">Adjust the four corners of the card</h2>
-    <div class="crop-stage">
-      <svg id="cropSvg" viewBox="0 0 100 100"></svg>
+    <div class="crop-layout">
+      <div class="crop-stage">
+        <svg id="cropSvg" viewBox="0 0 100 100"></svg>
+      </div>
+      <div class="crop-side">
+        <div class="crop-group">
+          <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS</button>
+          <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
+          <p class="hint" id="tapHint" hidden></p>
+        </div>
+        <div class="crop-group crop-sliders">
+          <label class="field">
+            <span>Brightness <span id="brightnessVal"></span>%</span>
+            <input type="range" id="brightnessRange" min="50" max="150" step="1">
+          </label>
+          <label class="field">
+            <span>Contrast <span id="contrastVal"></span>%</span>
+            <input type="range" id="contrastRange" min="50" max="150" step="1">
+          </label>
+        </div>
+        <div class="crop-actions">
+          <button class="btn primary" id="cropApply">APPLY</button>
+          <button class="btn ghost" id="cropCancel">CANCEL</button>
+        </div>
+      </div>
     </div>
     <canvas id="magnifierCanvas" class="magnifier" width="150" height="150"></canvas>
-    <div class="dialog-actions" style="justify-content:flex-start; margin-top:10px; gap:8px;">
-      <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
-      <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS</button>
-    </div>
-    <p class="hint" id="tapHint" hidden style="margin:8px 0 0;"></p>
-    <div class="slider-row">
-      <label class="field">
-        <span>Brightness <span id="brightnessVal"></span>%</span>
-        <input type="range" id="brightnessRange" min="50" max="150" step="1">
-      </label>
-      <label class="field">
-        <span>Contrast <span id="contrastVal"></span>%</span>
-        <input type="range" id="contrastRange" min="50" max="150" step="1">
-      </label>
-    </div>
-    <div class="dialog-actions">
-      <button class="btn ghost" id="cropCancel">CANCEL</button>
-      <button class="btn primary" id="cropApply">APPLY</button>
-    </div>
   </div>
 </div>
 
@@ -1487,9 +1528,18 @@
 
     // Fit the SVG into a bounded box (both width AND height capped) so a
     // portrait/tall photo letterboxes instead of stretching the dialog
-    // taller than the viewport.
-    var maxW = Math.min(560, window.innerWidth * 0.8);
-    var maxH = window.innerHeight * 0.5;
+    // taller than the viewport. Width comes from the stage element itself
+    // rather than a fixed number, so the photo grows to whatever the
+    // two-column layout actually leaves for it; clientWidth is only 0 if the
+    // dialog is still hidden, in which case fall back to the old cap.
+    // Derive the budget from the viewport, not from the stage element: the
+    // dialog now sizes itself to the photo, so measuring the stage to size
+    // the photo would be circular. 250 sidebar + 18 gap + 40 dialog padding
+    // + 20 stage padding, matching the CSS above.
+    var sidebarW = window.innerWidth > 860 ? 268 : 0;
+    var dialogMax = Math.min(1020, window.innerWidth * 0.96);
+    var maxW = Math.max(160, dialogMax - 60 - sidebarW);
+    var maxH = window.innerHeight * 0.72;
     var fitScale = Math.min(maxW / nw, maxH / nh, 1);
     var renderW = Math.max(120, nw * fitScale), renderH = Math.max(120, nh * fitScale);
     cropSvg.style.width = renderW + 'px';
