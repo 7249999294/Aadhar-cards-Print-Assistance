@@ -1512,31 +1512,60 @@
         var s = state.settings;
         var outAspect = s.aadhaarW / s.aadhaarH;
         var outW = 1000, outH = Math.round(outW / outAspect);
+        // A phone photo is commonly 3000-4000px across while the corrected
+        // card is 1000px, so most source pixels have to be merged, not picked.
+        // Reading one pixel per output pixel and ignoring its neighbours
+        // discards ~15 of every 16 and aliases badly — it's what makes the QR
+        // block shimmer and fine print crawl once printed. So: let the browser
+        // do a properly filtered downscale to about 2 source pixels per output
+        // pixel first (drawImage averages; a manual loop would not), then
+        // sample what remains bilinearly.
+        function edgeLen(a, b){ return Math.hypot(b[0]-a[0], b[1]-a[1]); }
+        var srcWEst = (edgeLen(corners[0], corners[1]) + edgeLen(corners[3], corners[2])) / 2;
+        var srcHEst = (edgeLen(corners[1], corners[2]) + edgeLen(corners[0], corners[3])) / 2;
+        var shrink = Math.min(1, (2 * outW) / Math.max(1, srcWEst),
+                                 (2 * outH) / Math.max(1, srcHEst));
+
         var srcCanvas = document.createElement('canvas');
-        srcCanvas.width = srcImg.naturalWidth; srcCanvas.height = srcImg.naturalHeight;
+        srcCanvas.width = Math.max(1, Math.round(srcImg.naturalWidth * shrink));
+        srcCanvas.height = Math.max(1, Math.round(srcImg.naturalHeight * shrink));
         var sctx = srcCanvas.getContext('2d');
-        sctx.drawImage(srcImg, 0, 0);
+        sctx.imageSmoothingEnabled = true;
+        sctx.imageSmoothingQuality = 'high';
+        sctx.drawImage(srcImg, 0, 0, srcCanvas.width, srcCanvas.height);
         var srcData = sctx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
 
         var dstRect = [[0,0],[outW,0],[outW,outH],[0,outH]];
-        var mapDstToSrc = computeHomography(dstRect, corners);
+        var mapDstToSrc = computeHomography(dstRect,
+          corners.map(function(p){ return [p[0]*shrink, p[1]*shrink]; }));
 
         var outCanvas = document.createElement('canvas');
         outCanvas.width = outW; outCanvas.height = outH;
         var octx = outCanvas.getContext('2d');
         var outData = octx.createImageData(outW, outH);
         var sw = srcCanvas.width, sh = srcCanvas.height;
+        var sd = srcData.data, od = outData.data;
         for (var y = 0; y < outH; y++){
           for (var x = 0; x < outW; x++){
-            var mapped = mapDstToSrc(x, y);
-            var ix = Math.round(mapped[0]), iy = Math.round(mapped[1]);
+            // sample at the pixel's centre, not its corner, so the result
+            // isn't shifted half a pixel against the corners the user set
+            var mapped = mapDstToSrc(x + 0.5, y + 0.5);
+            var fx = mapped[0], fy = mapped[1];
             var di = (y*outW + x) * 4;
-            if (ix >= 0 && ix < sw && iy >= 0 && iy < sh){
-              var si = (iy*sw + ix) * 4;
-              outData.data[di]=srcData.data[si]; outData.data[di+1]=srcData.data[si+1];
-              outData.data[di+2]=srcData.data[si+2]; outData.data[di+3]=255;
+            if (fx >= 0 && fy >= 0 && fx <= sw - 1 && fy <= sh - 1){
+              var x0 = fx | 0, y0 = fy | 0;
+              var x1 = x0 + 1 < sw ? x0 + 1 : x0, y1 = y0 + 1 < sh ? y0 + 1 : y0;
+              var ax = fx - x0, ay = fy - y0;
+              var i00 = (y0*sw + x0)*4, i10 = (y0*sw + x1)*4;
+              var i01 = (y1*sw + x0)*4, i11 = (y1*sw + x1)*4;
+              for (var ch2 = 0; ch2 < 3; ch2++){
+                var top = sd[i00+ch2]*(1-ax) + sd[i10+ch2]*ax;
+                var bot = sd[i01+ch2]*(1-ax) + sd[i11+ch2]*ax;
+                od[di+ch2] = top*(1-ay) + bot*ay;
+              }
+              od[di+3] = 255;
             } else {
-              outData.data[di]=255; outData.data[di+1]=255; outData.data[di+2]=255; outData.data[di+3]=255;
+              od[di]=255; od[di+1]=255; od[di+2]=255; od[di+3]=255;
             }
           }
         }
