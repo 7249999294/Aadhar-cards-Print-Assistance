@@ -99,6 +99,10 @@
   }
   .field textarea{resize:vertical;}
   .field input:disabled{background:var(--bg); color:var(--muted);}
+  .pdf-strip{
+    display:flex; align-items:center; gap:8px; margin:-4px 0 12px; font-size:12px; color:var(--muted);
+  }
+  .pdf-strip-spacer{flex:1;}
   .auth-divider{text-align:center; font-size:11px; color:var(--muted); margin:12px 0;}
   .google-btn{
     width:100%; display:flex; align-items:center; justify-content:center; gap:10px;
@@ -193,7 +197,8 @@
   }
   .paste-zone .big{font-size:13px; font-weight:700;}
   .paste-zone .small{font-size:11px; color:var(--muted);}
-  .capture-btn-row{display:flex; gap:8px; margin-top:2px;}
+  .capture-btn-row{display:flex; gap:8px; margin-top:2px; flex-wrap:wrap; justify-content:center;}
+  .capture-btn-row .btn{padding:8px 10px; font-size:12px;}
   .panel-img{width:100%; height:100%; object-fit:contain; display:block;}
   .panel-meta{padding:6px 10px; font-size:12px; color:var(--muted); flex-shrink:0; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; gap:8px;}
   .edit-panel-btn{padding:4px 10px; font-size:11px;}
@@ -392,10 +397,12 @@
             <div class="capture-btn-row">
               <button type="button" class="btn ghost small camera-btn">📷 CAMERA</button>
               <button type="button" class="btn ghost small gallery-btn">🖼️ GALLERY</button>
+              <button type="button" class="btn ghost small pdf-btn">📄 PDF</button>
             </div>
           </div>
           <input type="file" accept="image/*,.heic,.heif" capture="environment" class="camera-input" hidden>
           <input type="file" accept="image/*,.heic,.heif" class="gallery-input" hidden>
+          <input type="file" accept="application/pdf,.pdf" class="pdf-input" hidden>
           <img class="panel-img" hidden>
         </div>
         <div class="panel-meta">
@@ -413,10 +420,12 @@
             <div class="capture-btn-row">
               <button type="button" class="btn ghost small camera-btn">📷 CAMERA</button>
               <button type="button" class="btn ghost small gallery-btn">🖼️ GALLERY</button>
+              <button type="button" class="btn ghost small pdf-btn">📄 PDF</button>
             </div>
           </div>
           <input type="file" accept="image/*,.heic,.heif" capture="environment" class="camera-input" hidden>
           <input type="file" accept="image/*,.heic,.heif" class="gallery-input" hidden>
+          <input type="file" accept="application/pdf,.pdf" class="pdf-input" hidden>
           <img class="panel-img" hidden>
         </div>
         <div class="panel-meta">
@@ -455,6 +464,16 @@
 <div class="dialog-backdrop" id="settingsBackdrop" hidden>
   <div class="dialog">
     <h2>Template settings</h2>
+    <label class="field" style="margin-bottom:12px;">Preset
+      <select id="setPreset">
+        <option value="">— choose a preset —</option>
+        <option value="default">Factory default (stacked, right half)</option>
+        <option value="centered">Centered — stacked</option>
+        <option value="sidebyside">Side by side — one row</option>
+        <option value="corner">Top-left corner — saves paper</option>
+      </select>
+    </label>
+    <p class="hint" style="margin:-6px 0 12px;">Picking a preset only fills the fields below — nothing is saved until DONE.</p>
     <div class="grid2">
       <label class="field">Aadhaar width (mm)<input class="input" type="number" step="0.1" id="setW"></label>
       <label class="field">Aadhaar height (mm)<input class="input" type="number" step="0.1" id="setH"></label>
@@ -473,6 +492,13 @@
 <div class="dialog-backdrop" id="cropBackdrop" hidden>
   <div class="dialog crop-dialog">
     <h2 id="cropTitle">Adjust the four corners of the card</h2>
+    <div class="pdf-strip" id="pdfStrip" hidden>
+      <button type="button" class="btn ghost small" id="pdfPrevPage">◀</button>
+      <span id="pdfPageLabel">Page 1 of 1</span>
+      <button type="button" class="btn ghost small" id="pdfNextPage">▶</button>
+      <span class="pdf-strip-spacer"></span>
+      <button type="button" class="btn ghost small" id="pdfChangeBtn">🔄 Use a different PDF</button>
+    </div>
     <div class="crop-layout">
       <div class="crop-stage">
         <svg id="cropSvg" viewBox="0 0 100 100"></svg>
@@ -1542,6 +1568,9 @@
     // rather than rejecting the file outright.
     var looksLikeImage = file && (file.type.indexOf('image/') === 0 || /\.(heic|heif|jpe?g|png|webp|gif|bmp)$/i.test(file.name || ''));
     if (!looksLikeImage){ showError('Please use an image file.'); return; }
+    // A fresh photo means we're no longer looking at a PDF page — drop that
+    // context so the page-navigation strip doesn't linger from a past import.
+    pdfState = null; if (pdfStrip) pdfStrip.hidden = true;
     var reader = new FileReader();
     reader.onload = function(){ startCrop(target, reader.result); };
     reader.readAsDataURL(file);
@@ -1610,6 +1639,122 @@
   }
   wireCaptureButton('.camera-btn', '.camera-input');
   wireCaptureButton('.gallery-btn', '.gallery-input');
+
+  // ---------- PDF import (e-Aadhaar) ----------
+  // The UIDAI e-Aadhaar PDF has a fixed template: an official letter across
+  // the top ~68% of the page, a dashed cut-line, then two card-shaped boxes
+  // side by side at the bottom — front-like (photo, name, DOB) on the left,
+  // back-like (address, QR) on the right. Rendering that page and cropping
+  // those two boxes gives a flat, vector-sharp card straight from the source
+  // document — no photograph, no perspective, no lighting, none of the
+  // failure modes the camera path exists to fight.
+  var PDFJS_VERSION = '6.2.108';
+  var pdfjsLibPromise = null;
+  function loadPdfJs(){
+    if (!pdfjsLibPromise){
+      // Loaded only when a PDF is actually chosen, not on every page load.
+      pdfjsLibPromise = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@' + PDFJS_VERSION + '/build/pdf.min.mjs')
+        .then(function(lib){
+          lib.GlobalWorkerOptions.workerSrc =
+            'https://cdn.jsdelivr.net/npm/pdfjs-dist@' + PDFJS_VERSION + '/build/pdf.worker.min.mjs';
+          return lib;
+        });
+    }
+    return pdfjsLibPromise;
+  }
+
+  // Proportional guesses (fraction of page width/height) for where the front
+  // and back boxes sit, read off a real e-Aadhaar export. This is a STARTING
+  // position only, exactly like the photo auto-detector's guess — drag or
+  // TAP 4 CORNERS still adjusts it, since the exact numbers can drift a
+  // little between UIDAI template revisions or a scanned/re-saved copy.
+  var PDF_REGION = {
+    front: { x0:0.09,  y0:0.685, x1:0.47, y1:0.965 },
+    back:  { x0:0.515, y0:0.685, x1:0.90, y1:0.965 }
+  };
+  function regionToQuad(region, w, h){
+    return [
+      [region.x0*w, region.y0*h], [region.x1*w, region.y0*h],
+      [region.x1*w, region.y1*h], [region.x0*w, region.y1*h]
+    ];
+  }
+
+  var pdfState = null; // { pdf, numPages, pageCache:{n:{dataUrl,w,h}}, currentPage, side }
+  var pdfStrip = $('pdfStrip'), pdfPageLabel = $('pdfPageLabel');
+  var pdfPrevPage = $('pdfPrevPage'), pdfNextPage = $('pdfNextPage'), pdfChangeBtn = $('pdfChangeBtn');
+
+  async function renderPdfPage(pdf, n){
+    var page = await pdf.getPage(n);
+    // Target ~1800px on the long side: print-quality without being wasteful,
+    // since this is vector content and any sane DPI comes out sharp.
+    var base = page.getViewport({ scale: 1 });
+    var scale = 1800 / Math.max(base.width, base.height);
+    var viewport = page.getViewport({ scale: scale });
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width); canvas.height = Math.round(viewport.height);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); // PDF pages can be transparent
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height };
+  }
+  function openPdfSide(side){
+    var st = pdfState;
+    if (!st) return;
+    st.side = side;
+    var pageInfo = st.pageCache[st.currentPage];
+    var quad = regionToQuad(PDF_REGION[side], pageInfo.w, pageInfo.h);
+    pdfStrip.hidden = false;
+    pdfPageLabel.textContent = 'Page ' + st.currentPage + ' of ' + st.numPages;
+    pdfPrevPage.disabled = st.currentPage <= 1;
+    pdfNextPage.disabled = st.currentPage >= st.numPages;
+    startCrop(side, pageInfo.dataUrl, quad);
+  }
+  async function switchPdfPage(n){
+    var st = pdfState;
+    if (!st || n < 1 || n > st.numPages) return;
+    if (!st.pageCache[n]) st.pageCache[n] = await renderPdfPage(st.pdf, n);
+    st.currentPage = n;
+    openPdfSide(st.side);
+  }
+  pdfPrevPage.addEventListener('click', function(){ if (pdfState) switchPdfPage(pdfState.currentPage - 1); });
+  pdfNextPage.addEventListener('click', function(){ if (pdfState) switchPdfPage(pdfState.currentPage + 1); });
+  pdfChangeBtn.addEventListener('click', function(){
+    var side = cropState ? cropState.target : 'front';
+    pdfState = null; cropState = null; cropBackdrop.hidden = true; pdfStrip.hidden = true;
+    document.querySelector('.panel[data-side="' + side + '"] .pdf-input').click();
+  });
+  async function handlePdfFile(file, side){
+    processingBackdrop.hidden = false;
+    processingLabel.textContent = 'Reading PDF…';
+    try{
+      var lib = await loadPdfJs();
+      var buf = await file.arrayBuffer();
+      var pdf = await lib.getDocument({ data: buf }).promise;
+      var first = await renderPdfPage(pdf, 1);
+      pdfState = { pdf: pdf, numPages: pdf.numPages, pageCache: { 1: first }, currentPage: 1, side: side };
+      processingBackdrop.hidden = true;
+      openPdfSide(side);
+    }catch(e){
+      processingBackdrop.hidden = true;
+      showError('Could not read that PDF — make sure it is the official e-Aadhaar file downloaded from UIDAI.');
+    }
+  }
+  document.querySelectorAll('.pdf-btn').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      if (cropState) return;
+      var panel = btn.closest('.panel');
+      panel.querySelector('.pdf-input').click();
+    });
+  });
+  document.querySelectorAll('.pdf-input').forEach(function(input){
+    var side = input.closest('.panel').getAttribute('data-side');
+    input.addEventListener('change', function(e){
+      var file = e.target.files && e.target.files[0];
+      input.value = '';
+      if (file) handlePdfFile(file, side);
+    });
+  });
 
   // ---------- crop dialog ----------
   function startCrop(target, dataUrl, presetCorners){
@@ -1922,7 +2067,10 @@
     hideMagnifier();
   });
 
-  cropCancel.addEventListener('click', function(){ cropState = null; cropBackdrop.hidden = true; hideMagnifier(); });
+  cropCancel.addEventListener('click', function(){
+    cropState = null; cropBackdrop.hidden = true; hideMagnifier();
+    pdfState = null; if (pdfStrip) pdfStrip.hidden = true;
+  });
 
   function rotateImage90(dataUrl, srcW, srcH){
     return new Promise(function(resolve){
@@ -2053,6 +2201,12 @@
     var corners = cropState.corners;
     var imageSrc = cropState.imageSrc;
     var readyCanvas = cropState.previewCanvas;   // reuse the preview if there is one
+    // Both card boxes live on the SAME e-Aadhaar page, so if this crop came
+    // from a PDF and the other slot is still empty, chain straight into it —
+    // one PDF upload, two quick corner confirmations, both sides done.
+    var chainOther = pdfState && pdfState.side === target
+      ? (target === 'front' ? 'back' : 'front') : null;
+    if (chainOther && state[chainOther].processed) chainOther = null;
     cropBackdrop.hidden = true;
     processingBackdrop.hidden = false;
     processingLabel.textContent = 'Processing…';
@@ -2065,20 +2219,38 @@
         cropState = null;
         processingBackdrop.hidden = true;
         render();
+        if (chainOther) openPdfSide(chainOther);
       }, 30);
     };
     srcImg.src = imageSrc;
   });
 
   // ---------- settings ----------
+  // Geometry only, computed against the real A4/card dimensions — none of
+  // these change how many slots exist (still one front + one back), only
+  // where they sit, since that is all the current print layout supports.
+  var TEMPLATE_PRESETS = {
+    default:    { aadhaarW:85.6, aadhaarH:54, frontX:104.4, frontY:30,  backX:104.4, backY:110 },
+    centered:   { aadhaarW:85.6, aadhaarH:54, frontX:62.2,  frontY:25,  backX:62.2,  backY:100 },
+    sidebyside: { aadhaarW:85.6, aadhaarH:54, frontX:15,    frontY:121, backX:109.4, backY:121 },
+    corner:     { aadhaarW:85.6, aadhaarH:54, frontX:5,     frontY:5,   backX:5,     backY:64  }
+  };
   function openSettings(){
     var s = state.settings;
+    $('setPreset').value = '';
     $('setW').value = s.aadhaarW; $('setH').value = s.aadhaarH;
     $('setFX').value = s.frontX; $('setFY').value = s.frontY;
     $('setBX').value = s.backX; $('setBY').value = s.backY;
     settingsBackdrop.hidden = false;
   }
   settingsBtn.addEventListener('click', openSettings);
+  $('setPreset').addEventListener('change', function(){
+    var p = TEMPLATE_PRESETS[this.value];
+    if (!p) return;
+    $('setW').value = p.aadhaarW; $('setH').value = p.aadhaarH;
+    $('setFX').value = p.frontX; $('setFY').value = p.frontY;
+    $('setBX').value = p.backX; $('setBY').value = p.backY;
+  });
   function settingsFromInputs(){
     return Object.assign({}, state.settings, {
       aadhaarW: parseFloat($('setW').value) || state.settings.aadhaarW,
