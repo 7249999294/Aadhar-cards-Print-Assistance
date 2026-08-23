@@ -72,6 +72,33 @@
     color:var(--text); cursor:pointer; font-family:inherit;
   }
   .profile-menu-item:hover{background:var(--bg);}
+  .stat-row{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
+  .stat-card{
+    background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px;
+  }
+  .stat-card span{display:block; font-size:10px; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--muted); font-weight:700; margin-bottom:3px;}
+  .stat-card b{font-size:18px; font-weight:700;}
+  .section-head{font-size:12px; text-transform:uppercase; letter-spacing:0.06em;
+    color:var(--muted); margin:18px 0 8px;}
+  .usage-chart{
+    display:flex; align-items:flex-end; gap:4px; height:110px;
+    background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px;
+  }
+  .usage-bar{flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0;}
+  .usage-bar i{
+    display:block; width:100%; background:var(--accent); border-radius:3px 3px 0 0;
+    min-height:2px; transition:height .2s;
+  }
+  .usage-bar u{font-size:9px; color:var(--muted); text-decoration:none; font-weight:600;
+    white-space:nowrap; overflow:hidden;}
+  .usage-empty{color:var(--muted); font-size:12px; margin:auto;}
+  .field select, .field textarea{
+    border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-size:14px;
+    font-family:inherit; color:var(--text); width:100%; background:var(--surface);
+  }
+  .field textarea{resize:vertical;}
+  .field input:disabled{background:var(--bg); color:var(--muted);}
   .auth-divider{text-align:center; font-size:11px; color:var(--muted); margin:12px 0;}
   .google-btn{
     width:100%; display:flex; align-items:center; justify-content:center; gap:10px;
@@ -331,6 +358,8 @@
               <span class="profile-menu-label">Signed in as</span>
               <span id="userEmailText"></span>
             </div>
+            <button type="button" class="profile-menu-item" id="profileBtn" role="menuitem">Profile &amp; usage</button>
+            <button type="button" class="profile-menu-item" id="feedbackBtn" role="menuitem">Send feedback</button>
             <button type="button" class="profile-menu-item" id="signOutBtn" role="menuitem">Sign out</button>
           </div>
         </div>
@@ -495,6 +524,57 @@
     <div class="error-tag" id="licenseError" hidden style="margin-top:10px;"></div>
     <div class="dialog-actions"><button class="btn primary" id="licenseActivateBtn">ACTIVATE</button></div>
     <p class="hint">To purchase a license, contact <strong>Aamantran Print</strong>.</p>
+  </div>
+</div>
+
+<div class="dialog-backdrop" id="profileBackdrop" hidden>
+  <div class="dialog" style="width:560px;">
+    <h2>Profile &amp; usage</h2>
+    <div class="stat-row">
+      <div class="stat-card"><span>Total prints</span><b id="profTotal">0</b></div>
+      <div class="stat-card"><span>Today</span><b id="profToday">0</b></div>
+      <div class="stat-card"><span>Member since</span><b id="profSince">—</b></div>
+    </div>
+    <div class="grid2" style="margin-top:14px;">
+      <label class="field"><span>Shop / business name</span>
+        <input type="text" id="profBusiness" placeholder="e.g. Sharma Cyber Cafe"></label>
+      <label class="field"><span>Your name</span>
+        <input type="text" id="profName" placeholder="e.g. Ramesh Sharma"></label>
+      <label class="field"><span>Phone</span>
+        <input type="tel" id="profPhone" placeholder="10-digit mobile"></label>
+      <label class="field"><span>Email</span>
+        <input type="email" id="profEmail" disabled></label>
+    </div>
+    <h3 class="section-head">Prints — last 14 days</h3>
+    <div id="profChart" class="usage-chart"></div>
+    <div class="error-tag" id="profMsg" hidden></div>
+    <div class="dialog-actions">
+      <button class="btn ghost" id="profileClose">CLOSE</button>
+      <button class="btn primary" id="profileSave">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<div class="dialog-backdrop" id="feedbackBackdrop" hidden>
+  <div class="dialog" style="width:480px;">
+    <h2>Send feedback</h2>
+    <p class="hint" style="margin-top:0;">Tell us what broke or what would help. We read every message.</p>
+    <label class="field" style="margin-bottom:12px;"><span>Type</span>
+      <select id="fbType">
+        <option value="problem">Something is not working</option>
+        <option value="suggestion">Suggestion / feature request</option>
+        <option value="detection">Card detection was wrong</option>
+        <option value="other">Other</option>
+      </select>
+    </label>
+    <label class="field"><span>Message</span>
+      <textarea id="fbMessage" rows="5" placeholder="Describe it in your own words…"></textarea></label>
+    <p class="hint">Your email and shop name are included so we can reply. No card photos are ever sent.</p>
+    <div class="error-tag" id="fbMsg" hidden></div>
+    <div class="dialog-actions">
+      <button class="btn ghost" id="feedbackClose">CANCEL</button>
+      <button class="btn primary" id="feedbackSend">SEND</button>
+    </div>
   </div>
 </div>
 
@@ -1866,11 +1946,16 @@
     rotateImage90(cropState.imageSrc, oldW, oldH).then(function(res){
       cropState.imageSrc = res.dataUrl;
       cropState.natural = { w: res.w, h: res.h };
+      var wasPreviewing = !cropPreviewCanvas.hidden;
       var img = new Image();
       img.onload = function(){
         cropState.imgEl = img;
         cropState.corners = autoDetectCorners(img);
         renderCropSvg();
+        // The preview hides the SVG, so redrawing it alone left the old
+        // flattened card on screen and rotate looked like it did nothing.
+        // Re-flatten from the rotated photo instead.
+        if (wasPreviewing) setCropPreview(true);
         rotateBtn.disabled = false;
       };
       img.src = res.dataUrl;
@@ -2216,7 +2301,8 @@ import {
   GoogleAuthProvider, signInWithPopup, signOut, sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp
+  getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp,
+  collection, addDoc, getDocs, query, orderBy, limit
 } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
 
 var firebaseConfig = {
@@ -2384,11 +2470,144 @@ onAuthStateChanged(auth, function(user){
   }
 });
 
+// ---------- profile & usage ----------
+// Schema mirrors Task Bhumi: everything under users/{uid}, feedback in one
+// global collection. All of it is Spark-tier Firestore — no Cloud Functions,
+// so nothing here needs a Blaze upgrade.
+var profileBackdrop = $('profileBackdrop'), feedbackBackdrop = $('feedbackBackdrop');
+function dayKey(d){
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' +
+         String(d.getDate()).padStart(2,'0');
+}
+function setMsg(el, text, isError){
+  el.hidden = !text;
+  el.textContent = text || '';
+  el.style.background = isError ? '' : 'rgba(47,191,113,0.15)';
+  el.style.color = isError ? '' : '#1f7a4d';
+}
+// Renders the bar chart by hand rather than pulling in a charting library:
+// the page is a single self-contained file and a 14-bar chart does not
+// justify a dependency.
+function renderUsageChart(rows){
+  var host = $('profChart');
+  host.innerHTML = '';
+  var max = rows.reduce(function(m,r){ return Math.max(m, r.count); }, 0);
+  if (!max){
+    var p = document.createElement('span');
+    p.className = 'usage-empty';
+    p.textContent = 'No prints recorded yet — the chart fills in as you print.';
+    host.appendChild(p);
+    return;
+  }
+  rows.forEach(function(r){
+    var bar = document.createElement('div');
+    bar.className = 'usage-bar';
+    bar.title = r.key + ' — ' + r.count + ' print' + (r.count === 1 ? '' : 's');
+    var i = document.createElement('i');
+    i.style.height = Math.max(2, Math.round((r.count / max) * 78)) + 'px';
+    if (!r.count) i.style.opacity = '0.25';
+    var u = document.createElement('u');
+    u.textContent = r.key.slice(8);            // day of month
+    bar.appendChild(i); bar.appendChild(u);
+    host.appendChild(bar);
+  });
+}
+async function loadUsage(uid){
+  var counts = {};
+  try{
+    var snap = await getDocs(query(collection(db, 'users', uid, 'dailyPrints'),
+                                   orderBy('date', 'desc'), limit(60)));
+    snap.forEach(function(d){ counts[d.id] = (d.data().count) || 0; });
+  }catch(e){ /* offline or rules — chart just shows what we have */ }
+  var rows = [];
+  for (var i = 13; i >= 0; i--){
+    var d = new Date(); d.setDate(d.getDate() - i);
+    var k = dayKey(d);
+    rows.push({ key: k, count: counts[k] || 0 });
+  }
+  renderUsageChart(rows);
+}
+async function openProfile(){
+  setProfileMenu(false);
+  if (!currentUser){ openAuthDialog(); return; }
+  setMsg($('profMsg'), '', true);
+  profileBackdrop.hidden = false;
+  $('profEmail').value = currentUser.email || '';
+  var local = window.AadhaarPrintApp.getCounters ? window.AadhaarPrintApp.getCounters() : {today:0,total:0};
+  $('profToday').textContent = local.today || 0;
+  $('profTotal').textContent = local.total || 0;
+  try{
+    var snap = await getDoc(doc(db, 'users', currentUser.uid));
+    var d = snap.exists() ? snap.data() : {};
+    $('profName').value = d.name || currentUser.displayName || '';
+    $('profBusiness').value = d.business || '';
+    $('profPhone').value = d.phone || '';
+    if (typeof d.totalPrints === 'number') $('profTotal').textContent = d.totalPrints;
+    var created = d.createdAt && d.createdAt.toDate ? d.createdAt.toDate() : null;
+    $('profSince').textContent = created
+      ? created.toLocaleDateString('en-IN', { month:'short', year:'numeric' }) : '—';
+  }catch(e){ setMsg($('profMsg'), 'Could not load your profile — check your connection.', true); }
+  loadUsage(currentUser.uid);
+}
+$('profileBtn').addEventListener('click', openProfile);
+$('profileClose').addEventListener('click', function(){ profileBackdrop.hidden = true; });
+$('profileSave').addEventListener('click', async function(){
+  if (!currentUser) return;
+  var btn = this; btn.disabled = true;
+  try{
+    await setDoc(doc(db, 'users', currentUser.uid), {
+      name: $('profName').value.trim(),
+      business: $('profBusiness').value.trim(),
+      phone: $('profPhone').value.trim(),
+      email: currentUser.email || '',
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    setMsg($('profMsg'), 'Saved ✓', false);
+  }catch(e){ setMsg($('profMsg'), 'Could not save — check your connection.', true); }
+  btn.disabled = false;
+});
+
+// ---------- feedback ----------
+$('feedbackBtn').addEventListener('click', function(){
+  setProfileMenu(false);
+  setMsg($('fbMsg'), '', true);
+  $('fbMessage').value = '';
+  feedbackBackdrop.hidden = false;
+  $('fbMessage').focus();
+});
+$('feedbackClose').addEventListener('click', function(){ feedbackBackdrop.hidden = true; });
+$('feedbackSend').addEventListener('click', async function(){
+  var msg = $('fbMessage').value.trim();
+  if (!msg){ setMsg($('fbMsg'), 'Please write a message first.', true); return; }
+  var btn = this; btn.disabled = true;
+  try{
+    await addDoc(collection(db, 'feedback'), {
+      uid: currentUser ? currentUser.uid : null,
+      email: currentUser ? (currentUser.email || '') : '',
+      type: $('fbType').value,
+      message: msg,
+      userAgent: navigator.userAgent.slice(0, 200),
+      createdAt: serverTimestamp()
+    });
+    setMsg($('fbMsg'), 'Thank you — sent ✓', false);
+    setTimeout(function(){ feedbackBackdrop.hidden = true; }, 1200);
+  }catch(e){ setMsg($('fbMsg'), 'Could not send — check your connection.', true); }
+  btn.disabled = false;
+});
+
 window.AadhaarPrintApp = window.AadhaarPrintApp || {};
 window.AadhaarPrintApp.onPrintRecorded = function(counters){
   if (!currentUser) return;
   var ref = doc(db, 'users', currentUser.uid);
   updateDoc(ref, { totalPrints: counters.total, lastPrintAt: serverTimestamp() }).catch(function(){});
+  // One document per calendar day, keyed by the date, so the usage chart is a
+  // cheap ordered read rather than a scan over every individual print. The
+  // running today-count is written wholesale, which also makes the write
+  // idempotent if a print is retried.
+  var key = dayKey(new Date());
+  setDoc(doc(db, 'users', currentUser.uid, 'dailyPrints', key),
+         { date: key, count: counters.today || 0, updatedAt: serverTimestamp() },
+         { merge: true }).catch(function(){});
 };
 </script>
 </body>

@@ -2,9 +2,28 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Each signed-in user can only read/write their own document.
+    // Each signed-in user can only read/write their own document, and
+    // everything beneath it (profile fields, dailyPrints, future settings).
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // Feedback is write-only from the app: a signed-in user may submit a
+    // message but nobody can read the collection back through the client, so
+    // one shop can never read another's reports. Reading happens in the
+    // Firebase console. `uid` is forced to match the sender so a message
+    // cannot be filed under someone else's name.
+    match /feedback/{docId} {
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.message is string
+                    && request.resource.data.message.size() > 0
+                    && request.resource.data.message.size() < 4000;
+      allow read, update, delete: if false;
     }
   }
 }
