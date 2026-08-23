@@ -1688,10 +1688,12 @@
       tapHint.hidden = false;
       tapHint.textContent = 'Tap corner ' + (cropState.tapPts.length + 1) +
         ' of 4 — any order. Hold and slide to place it exactly, then lift.';
-      tapCornersBtn.textContent = '✕ CANCEL TAPPING';
+      tapCornersBtn.textContent = '✕ CANCEL TAPPING (T)';
     } else {
       tapHint.hidden = true;
-      tapCornersBtn.textContent = '👆 TAP 4 CORNERS';
+      // keep the shortcut in the label — this runs on every crop dialog open
+      // and would otherwise wipe the "(T)" the markup starts with
+      tapCornersBtn.textContent = '👆 TAP 4 CORNERS (T)';
     }
   }
   tapCornersBtn.addEventListener('click', function(){
