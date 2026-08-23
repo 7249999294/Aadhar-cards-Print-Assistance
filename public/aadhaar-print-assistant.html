@@ -37,9 +37,41 @@
   .header-top-row{display:flex; align-items:center; gap:10px;}
   .header-logo{width:72px; height:72px; border-radius:10px; display:block;}
   .header-top-row .btn{padding:4px 10px; font-size:11px;}
-  .profile-chip{display:flex; align-items:center; gap:6px;}
-  .profile-avatar{font-size:16px; line-height:1;}
-  #userEmailText{font-size:11px; font-weight:600; color:var(--muted);}
+  /* A `display` rule beats the `hidden` attribute, which is why the profile
+     chip stayed on screen while signed out and SIGN IN and SIGN OUT appeared
+     together. Enforced globally so the same trap can't be walked into again. */
+  [hidden]{display:none !important;}
+  .profile-chip{position:relative; display:flex; align-items:center;}
+  .avatar-btn{
+    width:34px; height:34px; border-radius:50%; padding:0; overflow:hidden;
+    border:1px solid var(--border); background:var(--accent); color:#fff;
+    font-size:14px; font-weight:700; font-family:inherit; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; line-height:1;
+  }
+  .avatar-btn:hover{filter:brightness(1.08);}
+  .avatar-btn img{width:100%; height:100%; object-fit:cover; display:block;}
+  .profile-menu{
+    position:absolute; top:calc(100% + 8px); right:0; min-width:210px; z-index:60;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.18); padding:6px; text-align:left;
+  }
+  .profile-menu-head{
+    padding:8px 10px 9px; border-bottom:1px solid var(--border); margin-bottom:4px;
+  }
+  .profile-menu-label{
+    display:block; font-size:10px; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--muted); font-weight:700; margin-bottom:2px;
+  }
+  #userEmailText{
+    display:block; font-size:12px; font-weight:600; color:var(--text);
+    max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .profile-menu-item{
+    display:block; width:100%; text-align:left; background:none; border:none;
+    padding:9px 10px; border-radius:6px; font-size:13px; font-weight:600;
+    color:var(--text); cursor:pointer; font-family:inherit;
+  }
+  .profile-menu-item:hover{background:var(--bg);}
   .auth-divider{text-align:center; font-size:11px; color:var(--muted); margin:12px 0;}
   .google-btn{
     width:100%; display:flex; align-items:center; justify-content:center; gap:10px;
@@ -288,11 +320,20 @@
     <div class="header-right">
       <div class="header-top-row">
         <button class="btn ghost small" id="signInBtn">SIGN IN</button>
-        <span id="userChip" hidden class="profile-chip">
-          <span class="profile-avatar">👤</span>
-          <span id="userEmailText"></span>
-          <button class="btn ghost small" id="signOutBtn">SIGN OUT</button>
-        </span>
+        <div id="userChip" hidden class="profile-chip">
+          <button type="button" class="avatar-btn" id="avatarBtn" aria-haspopup="menu"
+                  aria-expanded="false" aria-label="Account">
+            <img id="userPhoto" alt="" hidden>
+            <span id="userInitial">?</span>
+          </button>
+          <div class="profile-menu" id="profileMenu" hidden role="menu">
+            <div class="profile-menu-head">
+              <span class="profile-menu-label">Signed in as</span>
+              <span id="userEmailText"></span>
+            </div>
+            <button type="button" class="profile-menu-item" id="signOutBtn" role="menuitem">Sign out</button>
+          </div>
+        </div>
       </div>
       <span id="statusLine" hidden>Paste Aadhaar Front — Ctrl + V</span>
       <span id="trialBanner" class="hint" hidden></span>
@@ -2192,6 +2233,7 @@ var db = getFirestore(app);
 
 var $ = function(id){ return document.getElementById(id); };
 var signInBtn = $('signInBtn'), signOutBtn = $('signOutBtn'), userChip = $('userChip'), userEmailText = $('userEmailText');
+var avatarBtn = $('avatarBtn'), profileMenu = $('profileMenu'), userInitial = $('userInitial'), userPhoto = $('userPhoto');
 var authBackdrop = $('authBackdrop'), authTitle = $('authTitle'), authEmail = $('authEmail'), authPassword = $('authPassword');
 var authError = $('authError'), authSuccess = $('authSuccess'), authSubmit = $('authSubmit'), authToggleMode = $('authToggleMode'), googleSignInBtn = $('googleSignInBtn');
 var authClose = $('authClose'), authForgotBtn = $('authForgotBtn'), authToggleQuestion = $('authToggleQuestion');
@@ -2297,12 +2339,44 @@ function syncUserOnLogin(user){
   }).catch(function(){ /* Firestore sync is best-effort; local counters still work. */ });
 }
 
+// The avatar opens a small menu, the way every other site does it, rather
+// than parking SIGN OUT permanently in the header where it is easy to hit by
+// accident and adds noise for the common case of already being signed in.
+function setProfileMenu(open){
+  profileMenu.hidden = !open;
+  avatarBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+avatarBtn.addEventListener('click', function(e){
+  e.stopPropagation();
+  setProfileMenu(profileMenu.hidden);
+});
+document.addEventListener('click', function(e){
+  if (!profileMenu.hidden && !userChip.contains(e.target)) setProfileMenu(false);
+});
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape' && !profileMenu.hidden) setProfileMenu(false);
+});
+
 onAuthStateChanged(auth, function(user){
   currentUser = user;
+  setProfileMenu(false);
   if (user){
     signInBtn.hidden = true;
     userChip.hidden = false;
-    userEmailText.textContent = user.email || user.phoneNumber || 'Signed in';
+    var label = user.email || user.phoneNumber || 'Signed in';
+    userEmailText.textContent = label;
+    // Google accounts carry a photo; otherwise fall back to the first letter,
+    // which is what most apps show and is enough to tell whose session it is.
+    if (user.photoURL){
+      userPhoto.src = user.photoURL;
+      userPhoto.hidden = false;
+      userInitial.hidden = true;
+    } else {
+      userPhoto.hidden = true;
+      userInitial.hidden = false;
+      var src = (user.displayName || user.email || '?').trim();
+      userInitial.textContent = (src.charAt(0) || '?').toUpperCase();
+    }
     syncUserOnLogin(user);
   } else {
     signInBtn.hidden = false;
