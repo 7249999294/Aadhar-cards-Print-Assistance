@@ -410,9 +410,11 @@
       </div>
       <div class="crop-side">
         <div class="crop-group">
-          <button class="btn ghost small" id="cropPreviewBtn">✂ CROP (C)</button>
-          <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS (T)</button>
+          <!-- ordered to match how the job is actually done: straighten the
+               photo, mark the corners, then check the crop -->
           <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
+          <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS (T)</button>
+          <button class="btn ghost small" id="cropPreviewBtn">✂ CROP (C)</button>
           <p class="hint" id="tapHint" hidden></p>
         </div>
         <div class="crop-group crop-sliders">
@@ -1322,9 +1324,13 @@
 
   function updateStatusLine(){
     var s;
-    if (!state.front.processed) s = 'Paste Aadhaar Front — Ctrl + V';
-    else if (!state.back.processed) s = 'Paste Aadhaar Back — Ctrl + V';
-    else s = 'Ready to print';
+    var f = !!state.front.processed, b = !!state.back.processed;
+    // Now that one side is printable, say so rather than demanding the other
+    // — but still name the missing side, since forgetting the back is the
+    // easy mistake to make.
+    if (!f && !b) s = 'Paste Aadhaar Front — Ctrl + V';
+    else if (f && b) s = 'Ready to print';
+    else s = 'Ready to print — add the ' + (f ? 'back' : 'front') + ' too, or print as is';
     statusLine.textContent = s;
   }
 
@@ -1333,7 +1339,10 @@
     backPanel.classList.toggle('active-empty', state.activePanel === 'back' && !state.back.processed);
   }
 
-  function isPrintReady(){ return !!(state.front.processed && state.back.processed); }
+  // One side is enough to print. Plenty of jobs are front-only, and forcing a
+  // back scan that gets thrown away wastes the operator's time; the empty
+  // slot simply prints blank.
+  function isPrintReady(){ return !!(state.front.processed || state.back.processed); }
   function updatePrintButton(){ printBtn.disabled = !isPrintReady(); }
 
   function updateA4Preview(){
@@ -2026,11 +2035,45 @@
   clearBtn.addEventListener('click', function(){ wipe(); });
 
   // ---------- keyboard shortcuts ----------
+  // Every dialog answers to Escape and Enter. Listed innermost-first so that
+  // when two are somehow open at once, the key reaches the one on top.
+  // `dismiss` is null for the licence lock deliberately: letting Escape close
+  // it would hand back the app it exists to gate.
+  // looked up by id rather than closed over: the auth dialog's own variables
+  // live in the Firebase module script, which this classic script cannot see
+  function openDialogs(){
+    return [
+      { el: $('cropBackdrop'),     confirm: $('cropApply'),           dismiss: $('cropCancel') },
+      { el: $('settingsBackdrop'), confirm: $('settingsDone'),        dismiss: $('settingsDone') },
+      { el: $('authBackdrop'),     confirm: $('authSubmit'),          dismiss: $('authClose') },
+      { el: $('licenseLock'),      confirm: $('licenseActivateBtn'),  dismiss: null }
+    ].filter(function(d){ return d.el && !d.el.hidden; });
+  }
   window.addEventListener('keydown', function(e){
-    if (e.key === 'Escape' && cropState){ cropState = null; cropBackdrop.hidden = true; return; }
+    var tag = (e.target && e.target.tagName) || '';
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag);
+    var top = openDialogs()[0];
+
+    if (e.key === 'Escape' && top){
+      e.preventDefault();
+      if (top.dismiss) top.dismiss.click();
+      return;
+    }
+    // Enter confirms — but not from a textarea (newlines), and not when a
+    // button already has focus, since the browser will click that itself and
+    // we would fire the action twice.
+    if (e.key === 'Enter' && top && !e.ctrlKey && !e.metaKey && !e.altKey &&
+        tag !== 'TEXTAREA' && tag !== 'BUTTON' &&
+        !(document.activeElement && document.activeElement.tagName === 'BUTTON')){
+      if (top.confirm && !top.confirm.disabled){
+        e.preventDefault();
+        top.confirm.click();
+      }
+      return;
+    }
+
     // Single-letter shortcuts, so guard against firing while the operator is
     // typing into a field (the licence dialog and settings both have inputs).
-    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
     if (cropState && !typing && !e.ctrlKey && !e.metaKey && !e.altKey){
       if (e.key === 'r' || e.key === 'R'){ e.preventDefault(); rotateBtn.click(); return; }
       if (e.key === 'c' || e.key === 'C'){ e.preventDefault(); cropPreviewBtn.click(); return; }
