@@ -235,6 +235,8 @@
     .crop-actions .btn{width:auto; min-width:120px;}
   }
   .crop-stage svg{display:block; touch-action:none; cursor:crosshair;}
+  .crop-stage canvas{display:block; border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,0.18);}
+  .crop-stage canvas[hidden]{display:none;}
   .crop-handle{fill:var(--accent); stroke:#fff; stroke-width:3; cursor:grab;}
   .crop-line{stroke:var(--accent); stroke-width:3; fill:rgba(47,111,237,0.12);}
   .magnifier{
@@ -404,10 +406,12 @@
     <div class="crop-layout">
       <div class="crop-stage">
         <svg id="cropSvg" viewBox="0 0 100 100"></svg>
+        <canvas id="cropPreview" hidden></canvas>
       </div>
       <div class="crop-side">
         <div class="crop-group">
-          <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS</button>
+          <button class="btn ghost small" id="cropPreviewBtn">✂ CROP (C)</button>
+          <button class="btn ghost small" id="tapCornersBtn">👆 TAP 4 CORNERS (T)</button>
           <button class="btn ghost small" id="rotateBtn">⟳ ROTATE 90° (R)</button>
           <p class="hint" id="tapHint" hidden></p>
         </div>
@@ -645,6 +649,7 @@
   var cropBackdrop = $('cropBackdrop'), cropSvg = $('cropSvg'), cropCancel = $('cropCancel'), cropApply = $('cropApply'), cropTitle = $('cropTitle');
   var rotateBtn = $('rotateBtn');
   var tapCornersBtn = $('tapCornersBtn'), tapHint = $('tapHint');
+  var cropPreviewBtn = $('cropPreviewBtn'), cropPreviewCanvas = $('cropPreview');
   var magnifierCanvas = $('magnifierCanvas');
   var brightnessRange = $('brightnessRange'), contrastRange = $('contrastRange'), brightnessVal = $('brightnessVal'), contrastVal = $('contrastVal');
   var processingBackdrop = $('processingBackdrop'), processingLabel = $('processingLabel');
@@ -1489,7 +1494,7 @@
         target: target, imageSrc: dataUrl,
         natural: { w: img.naturalWidth, h: img.naturalHeight },
         corners: corners, dragIdx: null, imgEl: img,
-        tapPts: null, tapProvisional: null,
+        tapPts: null, tapProvisional: null, previewCanvas: null,
       };
       cropTitle.textContent = 'Adjust the four corners of the card (' + (target === 'front' ? 'Front' : 'Back') + ')';
       brightnessRange.value = state.settings.brightness;
@@ -1497,6 +1502,10 @@
       brightnessVal.textContent = state.settings.brightness;
       contrastVal.textContent = state.settings.contrast;
       cropBackdrop.hidden = false;
+      // a fresh photo always opens on the corners, never on a stale preview
+      cropPreviewCanvas.hidden = true;
+      cropSvg.style.display = 'block';
+      cropPreviewBtn.textContent = '✂ CROP (C)';
       renderCropSvg();
       updateTapUI();
     };
@@ -1504,6 +1513,12 @@
   }
 
   function updateCropFilterPreview(){
+    // while the cropped result is on screen the sliders should adjust that,
+    // not the hidden original underneath it
+    if (cropState && cropState.previewCanvas && !cropPreviewCanvas.hidden){
+      paintCropPreview();
+      return;
+    }
     var img = cropSvg.querySelector('image');
     if (!img) return;
     img.setAttribute('style', 'filter:brightness(' + (state.settings.brightness/100) + ') contrast(' + (state.settings.contrast/100) + ')');
@@ -1681,11 +1696,60 @@
   }
   tapCornersBtn.addEventListener('click', function(){
     if (!cropState) return;
+    if (!cropPreviewCanvas.hidden) setCropPreview(false);  // tapping implies editing
     cropState.tapPts = cropState.tapPts ? null : [];
     cropState.tapProvisional = null;
     hideMagnifier();
     renderCropSvg();
     updateTapUI();
+  });
+
+  // ---------- crop preview ----------
+  // Shows precisely what APPLY will produce. A corner that is a few pixels
+  // out is nearly invisible against the original photo but obvious once the
+  // card is flattened, so this catches it before it reaches paper.
+  function cropStageBudget(){
+    var sidebarW = window.innerWidth > 860 ? 268 : 0;
+    var dialogMax = Math.min(1020, window.innerWidth * 0.96);
+    return { w: Math.max(160, dialogMax - 60 - sidebarW), h: window.innerHeight * 0.72 };
+  }
+  function paintCropPreview(){
+    if (!cropState || !cropState.previewCanvas) return;
+    var toned = applyToneTo(cropState.previewCanvas);
+    cropPreviewCanvas.width = toned.width;
+    cropPreviewCanvas.height = toned.height;
+    cropPreviewCanvas.getContext('2d').drawImage(toned, 0, 0);
+    var b = cropStageBudget();
+    var sc = Math.min(b.w / toned.width, b.h / toned.height, 1);
+    cropPreviewCanvas.style.width = Math.round(toned.width * sc) + 'px';
+    cropPreviewCanvas.style.height = Math.round(toned.height * sc) + 'px';
+  }
+  function setCropPreview(on){
+    if (!cropState) return;
+    if (on){
+      hideMagnifier();
+      if (cropState.tapPts){          // can't be mid-tap and previewing at once
+        cropState.tapPts = null; cropState.tapProvisional = null; updateTapUI();
+      }
+      cropState.previewCanvas = correctPerspective(cropState.imgEl, cropState.corners);
+      paintCropPreview();
+      cropSvg.style.display = 'none';
+      cropPreviewCanvas.hidden = false;
+      cropPreviewBtn.textContent = '↩ EDIT CORNERS (C)';
+      cropTitle.textContent = 'Cropped result — this is what will print';
+    } else {
+      cropState.previewCanvas = null;
+      cropPreviewCanvas.hidden = true;
+      cropSvg.style.display = 'block';
+      cropPreviewBtn.textContent = '✂ CROP (C)';
+      cropTitle.textContent = 'Adjust the four corners of the card (' +
+        (cropState.target === 'front' ? 'Front' : 'Back') + ')';
+      renderCropSvg();
+    }
+  }
+  cropPreviewBtn.addEventListener('click', function(){
+    if (!cropState) return;
+    setCropPreview(cropPreviewCanvas.hidden);
   });
   cropSvg.addEventListener('pointerdown', function(e){
     if (!cropState || !cropState.tapPts) return;
@@ -1761,18 +1825,11 @@
     });
   });
 
-  cropApply.addEventListener('click', function(){
-    if (!cropState) return;
-    hideMagnifier();
-    var target = cropState.target;
-    var corners = cropState.corners;
-    var imageSrc = cropState.imageSrc;
-    cropBackdrop.hidden = true;
-    processingBackdrop.hidden = false;
-    processingLabel.textContent = 'Processing…';
-    var srcImg = new Image();
-    srcImg.onload = function(){
-      setTimeout(function(){
+  // Flattens the quadrilateral the operator has marked into a straight-on
+  // card image. Shared by the CROP preview and by APPLY, deliberately: the
+  // preview has to be the very image that gets printed, not a cheaper
+  // approximation of it, or it stops being worth looking at.
+  function correctPerspective(srcImg, corners){
         var s = state.settings;
         var outAspect = s.aadhaarW / s.aadhaarH;
         var outW = 1000, outH = Math.round(outW / outAspect);
@@ -1836,14 +1893,37 @@
         octx.putImageData(outData, 0, 0);
         var sharpened = sharpen(outData, outW, outH);
         octx.putImageData(sharpened, 0, 0);
+        return outCanvas;
+  }
 
-        var finalCanvas = document.createElement('canvas');
-        finalCanvas.width = outW; finalCanvas.height = outH;
-        var fctx = finalCanvas.getContext('2d');
-        fctx.filter = 'brightness(' + (state.settings.brightness/100) + ') contrast(' + (state.settings.contrast/100) + ')';
-        fctx.drawImage(outCanvas, 0, 0);
+  // Applies the brightness/contrast the sliders are set to. Kept separate
+  // from the geometry so the preview can re-run just this part when a slider
+  // moves, instead of redoing the whole perspective correction.
+  function applyToneTo(srcCanvas){
+    var out = document.createElement('canvas');
+    out.width = srcCanvas.width; out.height = srcCanvas.height;
+    var ctx = out.getContext('2d');
+    ctx.filter = 'brightness(' + (state.settings.brightness/100) + ') contrast(' +
+                 (state.settings.contrast/100) + ')';
+    ctx.drawImage(srcCanvas, 0, 0);
+    return out;
+  }
 
-        var dataUrl = finalCanvas.toDataURL('image/jpeg', 0.92);
+  cropApply.addEventListener('click', function(){
+    if (!cropState) return;
+    hideMagnifier();
+    var target = cropState.target;
+    var corners = cropState.corners;
+    var imageSrc = cropState.imageSrc;
+    var readyCanvas = cropState.previewCanvas;   // reuse the preview if there is one
+    cropBackdrop.hidden = true;
+    processingBackdrop.hidden = false;
+    processingLabel.textContent = 'Processing…';
+    var srcImg = new Image();
+    srcImg.onload = function(){
+      setTimeout(function(){
+        var outCanvas = readyCanvas || correctPerspective(srcImg, corners);
+        var dataUrl = applyToneTo(outCanvas).toDataURL('image/jpeg', 0.92);
         state[target] = { processed: dataUrl, statusText: 'Ready ✓', original: imageSrc, corners: corners };
         cropState = null;
         processingBackdrop.hidden = true;
@@ -1946,10 +2026,13 @@
   // ---------- keyboard shortcuts ----------
   window.addEventListener('keydown', function(e){
     if (e.key === 'Escape' && cropState){ cropState = null; cropBackdrop.hidden = true; return; }
-    if (cropState && (e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey){
-      e.preventDefault();
-      rotateBtn.click();
-      return;
+    // Single-letter shortcuts, so guard against firing while the operator is
+    // typing into a field (the licence dialog and settings both have inputs).
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
+    if (cropState && !typing && !e.ctrlKey && !e.metaKey && !e.altKey){
+      if (e.key === 'r' || e.key === 'R'){ e.preventDefault(); rotateBtn.click(); return; }
+      if (e.key === 'c' || e.key === 'C'){ e.preventDefault(); cropPreviewBtn.click(); return; }
+      if (e.key === 't' || e.key === 'T'){ e.preventDefault(); tapCornersBtn.click(); return; }
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')){
       e.preventDefault();
