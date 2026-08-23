@@ -51,15 +51,21 @@
   }
 
   .dialog.auth-dialog-split{
-    width:960px; max-width:96vw; padding:0; display:grid;
-    grid-template-columns:0.95fr 1.05fr; overflow:hidden; position:relative;
+    width:1100px; max-width:96vw; padding:0; display:grid;
+    grid-template-columns:1fr 340px; overflow:hidden; position:relative;
+    align-items:stretch;
   }
+  /* A real <img> rather than a background-image: the poster then dictates the
+     panel's height from its own proportions, so it is always shown whole with
+     no letterbox bars, and swapping in a poster of a different shape needs no
+     CSS change. As a background with size:contain it was leaving 175px of
+     empty white below itself. */
   .auth-side-panel{
-    background-image:url('icons/auth-banner.png');
-    background-size:contain; background-position:center; background-repeat:no-repeat;
-    background-color:#fff; min-height:100%;
+    background:#fff; display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
   }
-  .auth-form-panel{padding:44px 44px 36px; position:relative; text-align:left;}
+  .auth-side-panel img{display:block; width:100%; height:auto;}
+  .auth-form-panel{padding:36px 32px 30px; position:relative; text-align:left; align-self:center;}
   .auth-form-panel h2{margin:0 0 20px; font-size:22px; text-align:center;}
   .auth-form-logo{width:48px; height:48px; border-radius:10px; display:block; margin:0 auto 16px;}
   .auth-close{
@@ -85,12 +91,9 @@
   @media (max-width: 720px){
     /* Side-by-side doesn't fit a narrow phone screen — stack instead (grid
        auto-flows the two panels into rows when there's only one column).
-       The panel has no content of its own, so min-height:100% (which
-       stretches it to match the form's row height in the side-by-side
-       grid) collapses to 0 here — give it a real height via aspect-ratio
-       instead, same as the image itself. */
+       The <img> carries its own height, so nothing needs propping up here. */
     .dialog.auth-dialog-split{grid-template-columns:1fr; width:94vw;}
-    .auth-side-panel{aspect-ratio:1536/1024; min-height:0;}
+    .auth-form-panel{padding:24px 22px 22px;}
   }
   .counter-widget{
     position:fixed; left:16px; bottom:16px; z-index:40; display:flex; gap:18px;
@@ -410,7 +413,9 @@
 <div class="dialog-backdrop" id="authBackdrop" hidden>
   <div class="dialog auth-dialog-split">
     <button type="button" class="auth-close" id="authClose" aria-label="Close">✕</button>
-    <div class="auth-side-panel"></div>
+    <div class="auth-side-panel">
+      <img src="icons/auth-banner.png" alt="Aadhaar Print Assistant — fast, clean, accurate printing for print-out centres and cyber cafes">
+    </div>
     <div class="auth-form-panel">
       <img src="icons/icon-192.png" class="auth-form-logo" alt="Aadhaar Print Assistant">
       <h2 id="authTitle">Sign In</h2>
