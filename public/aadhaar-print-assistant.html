@@ -336,7 +336,12 @@
     body *{visibility:hidden;}
     #printRoot, #printRoot *{visibility:visible;}
     #printRoot{display:block !important; position:absolute; top:0; left:0;}
-    .print-sheet{width:210mm; height:297mm; position:relative; page-break-after:always;}
+    .print-sheet{width:210mm; height:297mm; position:relative;}
+    /* Break BETWEEN sheets only. Putting the break unconditionally on every
+       sheet (page-break-after:always with no :not(:last-child)) breaks after
+       the LAST one too, which is what was producing a trailing blank second
+       page on every single-copy print — the overwhelmingly common case. */
+    .print-sheet:not(:last-child){page-break-after:always;}
     .print-sheet img{position:absolute;}
   }
 </style>
