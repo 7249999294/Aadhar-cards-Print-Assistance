@@ -25,5 +25,28 @@ service cloud.firestore {
                     && request.resource.data.message.size() < 4000;
       allow read, update, delete: if false;
     }
+
+    // One public document totalling print activity across every shop —
+    // Task Bhumi's /stats/jobCards pattern. Readable by anyone (it's meant
+    // to be shown, not hidden), but a write can only move the counters
+    // forward by at most 1 at a time: that's what a real print does (the
+    // app's own transaction always increments by exactly 1), so this blocks
+    // a malicious or buggy client from resetting the count down or jumping
+    // it by an arbitrary amount, without needing a Cloud Function just to
+    // guard one counter.
+    match /stats/prints {
+      allow read: if true;
+      allow create: if request.auth != null
+                    && request.resource.data.allTime is int && request.resource.data.allTime <= 1
+                    && request.resource.data.today is int && request.resource.data.today <= 1;
+      allow update: if request.auth != null
+                    && request.resource.data.allTime is int
+                    && request.resource.data.allTime >= resource.data.allTime
+                    && request.resource.data.allTime <= resource.data.allTime + 1
+                    && request.resource.data.today is int
+                    && request.resource.data.today <= (resource.data.today) + 1
+                    && request.resource.data.today >= 0;
+      allow delete: if false;
+    }
   }
 }

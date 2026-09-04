@@ -729,6 +729,16 @@
   window.AadhaarPrintApp = window.AadhaarPrintApp || {};
   window.AadhaarPrintApp.getCounters = function(){ return counters; };
   window.AadhaarPrintApp.setCounters = function(c){ counters = c; saveCounters(c); renderCounters(); };
+  // Same bridge pattern for the print-layout template settings (card size,
+  // front/back position, brightness/contrast), so a shop's saved layout can
+  // follow them to a new PC or a cleared browser instead of living only in
+  // this one localStorage.
+  window.AadhaarPrintApp.getSettings = function(){ return state.settings; };
+  window.AadhaarPrintApp.setSettings = function(s){
+    state.settings = Object.assign(defaultSettings(), s);
+    saveSettings(state.settings);
+    updateA4Preview();
+  };
 
   // ---------- licensing (trial + signed license key) ----------
   // The tool works free for TRIAL_DAYS. After that it locks until a valid
@@ -2272,6 +2282,7 @@
     saveSettings(s);
     settingsBackdrop.hidden = true;
     render();
+    if (window.AadhaarPrintApp && window.AadhaarPrintApp.onSettingsSaved) window.AadhaarPrintApp.onSettingsSaved(s);
   });
   var settingsSetDefault = $('settingsSetDefault');
   settingsSetDefault.addEventListener('click', function(){
@@ -2479,7 +2490,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp,
-  collection, addDoc, getDocs, query, orderBy, limit
+  collection, addDoc, getDocs, query, orderBy, limit, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
 
 var firebaseConfig = {
@@ -2591,15 +2602,61 @@ function syncUserOnLogin(user){
       var remote = snap.data();
       var mergedTotal = Math.max(local.total || 0, remote.totalPrints || 0);
       window.AadhaarPrintApp.setCounters({ total: mergedTotal, today: local.today || 0 });
-      return updateDoc(ref, { totalPrints: mergedTotal, email: user.email || null, lastLogin: serverTimestamp() });
+      return updateDoc(ref, { uid: user.uid, totalPrints: mergedTotal, email: user.email || null, lastLogin: serverTimestamp() });
     }
     return setDoc(ref, {
+      uid: user.uid,
       totalPrints: local.total || 0,
       email: user.email || null,
       createdAt: serverTimestamp(),
       lastLogin: serverTimestamp(),
     });
+  }).then(function(){
+    return syncTemplateSettings(user.uid);
   }).catch(function(){ /* Firestore sync is best-effort; local counters still work. */ });
+}
+
+// Settings live under users/{uid}/settings/{settingId}, one document per
+// concern — templateSettings today, room for more later — rather than one
+// growing top-level user document, the same split Task Bhumi uses for
+// businessProfile/waTemplates/panelOrder.
+//
+// First sync ever (no cloud doc yet): treat local as the source of truth and
+// push it up, since it may already be a shop's deliberately-customised
+// layout. Every sync after that: the cloud copy wins, since it is the
+// version other devices may have since edited, and Settings is opened rarely
+// enough that losing an unsaved local edit made moments before login is not
+// a realistic case worth optimising for.
+function syncTemplateSettings(uid){
+  var ref = doc(db, 'users', uid, 'settings', 'templateSettings');
+  return getDoc(ref).then(function(snap){
+    if (snap.exists()){
+      window.AadhaarPrintApp.setSettings(snap.data());
+    } else {
+      return setDoc(ref, window.AadhaarPrintApp.getSettings());
+    }
+  });
+}
+window.AadhaarPrintApp = window.AadhaarPrintApp || {};
+window.AadhaarPrintApp.onSettingsSaved = function(settings){
+  if (!currentUser) return;
+  setDoc(doc(db, 'users', currentUser.uid, 'settings', 'templateSettings'), settings).catch(function(){});
+};
+
+// A single public document totalling activity across every shop using the
+// app — Task Bhumi's /stats/jobCards pattern. Written as a transaction so
+// two shops printing at the same instant can't clobber each other's
+// increment (a plain read-then-write race would silently drop one of them).
+function recordGlobalPrintStat(){
+  var key = dayKey(new Date());
+  var ref = doc(db, 'stats', 'prints');
+  runTransaction(db, function(tx){
+    return tx.get(ref).then(function(snap){
+      var d = snap.exists() ? snap.data() : { allTime: 0, today: 0, todayDate: key };
+      var today = d.todayDate === key ? (d.today || 0) + 1 : 1;
+      tx.set(ref, { allTime: (d.allTime || 0) + 1, today: today, todayDate: key }, { merge: true });
+    });
+  }).catch(function(){ /* best-effort — never blocks a print */ });
 }
 
 // The avatar opens a small menu, the way every other site does it, rather
@@ -2777,6 +2834,10 @@ window.AadhaarPrintApp.onPrintRecorded = function(counters){
   if (!currentUser) return;
   var ref = doc(db, 'users', currentUser.uid);
   updateDoc(ref, { totalPrints: counters.total, lastPrintAt: serverTimestamp() }).catch(function(){});
+  // Same signed-in gating as everything else here — an anonymous, unauthed
+  // writer would need opening the stats doc to the whole internet, which
+  // trades a small undercount for a real abuse surface. Not worth it.
+  recordGlobalPrintStat();
   // One document per calendar day, keyed by the date, so the usage chart is a
   // cheap ordered read rather than a scan over every individual print. The
   // running today-count is written wholesale, which also makes the write
